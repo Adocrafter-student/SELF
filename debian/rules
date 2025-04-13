@@ -1,0 +1,19 @@
+#!/usr/bin/make -f
+%:
+	dh $@
+
+override_dh_auto_build:
+	$(MAKE)
+
+override_dh_auto_install:
+	mkdir -p debian/self/usr/lib/self
+	mkdir -p debian/self/usr/sbin
+	cp ../$(BPF_PROG) debian/self/usr/lib/self/
+	cp ../$(USER_PROG) debian/self/usr/lib/self/
+	cp ../$(PKG_DIR)/self_start.sh debian/self/usr/sbin/self-start
+	cp ../$(PKG_DIR)/self_stop.sh debian/self/usr/sbin/self-stop
+	chmod 755 debian/self/usr/sbin/self-start
+	chmod 755 debian/self/usr/sbin/self-stop
+
+override_dh_installsystemd:
+	dh_installsystemd --name=self 

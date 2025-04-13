@@ -1,0 +1,4 @@
+usr/lib/self/ddos_protect.o usr/lib/self/
+usr/lib/self/main usr/lib/self/
+usr/sbin/self-start usr/sbin/
+usr/sbin/self-stop usr/sbin/ 

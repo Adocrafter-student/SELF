@@ -1,0 +1,14 @@
+Source: self
+Section: net
+Priority: optional
+Maintainer: Administrator <admin@example.com>
+Build-Depends: debhelper (>= 9), clang, libelf-dev, libbpf-dev
+Standards-Version: 4.5.0
+
+Package: self
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, libbpf0
+Description: Self-learning firewall based on eBPF
+ A DDoS protection system that uses eBPF to monitor and block malicious traffic.
+ This package provides a service that monitors network traffic and learns
+ to detect and prevent DDoS attacks. 

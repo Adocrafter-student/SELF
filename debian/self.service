@@ -1,0 +1,14 @@
+[Unit]
+Description=Self-learning firewall based on eBPF
+After=network.target
+
+[Service]
+Type=forking
+ExecStart=/usr/sbin/self-start
+ExecStop=/usr/sbin/self-stop
+PIDFile=/var/run/self.pid
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target 

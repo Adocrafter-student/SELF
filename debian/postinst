@@ -1,0 +1,31 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Set permissions
+        chmod 755 /usr/lib/self/main
+        chmod 755 /usr/sbin/self-start
+        chmod 755 /usr/sbin/self-stop
+        
+        # Enable and start service
+        if [ -x "$(command -v systemctl)" ]; then
+            systemctl daemon-reload
+            systemctl enable self.service
+            systemctl start self.service || true
+            echo "Self service enabled and started."
+        else
+            echo "systemd is not available, service must be started manually."
+        fi
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+
+    *)
+        echo "postinst does not recognize argument '$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0 

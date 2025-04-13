@@ -1,0 +1,25 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    purge)
+        # Removing configurations and temporary files
+        rm -f /var/run/self.pid
+        
+        # Disable service
+        if [ -x "$(command -v systemctl)" ]; then
+            systemctl disable self.service || true
+            systemctl daemon-reload
+        fi
+    ;;
+    
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+    ;;
+
+    *)
+        echo "postrm does not recognize argument '$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0 

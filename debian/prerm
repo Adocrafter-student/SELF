@@ -1,0 +1,29 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        # Stop service if it is active
+        if [ -x "$(command -v systemctl)" ]; then
+            if systemctl is-active --quiet self.service; then
+                systemctl stop self.service || true
+                echo "Self service stopped."
+            fi
+        else
+            # Stop service if systemd is not available
+            if [ -f /var/run/self.pid ]; then
+                /usr/sbin/self-stop
+            fi
+        fi
+    ;;
+
+    failed-upgrade)
+    ;;
+
+    *)
+        echo "prerm does not recognize argument '$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0 

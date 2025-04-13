@@ -1,0 +1,27 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    install|upgrade)
+        # Check if BPF modules are available
+        if ! lsmod | grep -q bpf; then
+            echo "Loading BPF module..."
+            modprobe bpf || true
+        fi
+        
+        # Check if BPF filesystem is available
+        if [ ! -d /sys/fs/bpf ]; then
+            mkdir -p /sys/fs/bpf
+        fi
+    ;;
+
+    abort-upgrade)
+    ;;
+
+    *)
+        echo "preinst does not recognize argument '$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0 

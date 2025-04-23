@@ -140,6 +140,18 @@ static int load_bpf_program(int test_only)
     }
     printf("Map opened successfully, fd: %d\n", map_fd);
 
+    // Pin the map to the filesystem only if it doesn't exist
+    if (access("/sys/fs/bpf/ip_traffic_map", F_OK) != 0) {
+        if (bpf_obj_pin(map_fd, "/sys/fs/bpf/ip_traffic_map")) {
+            fprintf(stderr, "Failed to pin map: %s\n", strerror(errno));
+            bpf_object__close(obj);
+            return -1;
+        }
+        printf("Map pinned successfully to /sys/fs/bpf/ip_traffic_map\n");
+    } else {
+        printf("Map already exists at /sys/fs/bpf/ip_traffic_map\n");
+    }
+
     // If we're only testing, stop here
     if (test_only) {
         printf("Test mode: BPF program loaded successfully. Not attaching to interface.\n");

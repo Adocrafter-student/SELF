@@ -6,6 +6,7 @@ USER_LDFLAGS = -lelf -lbpf -lpthread -lz -lrt
 
 BPF_PROG  = ddos_protect.o
 USER_PROG = main
+SELF_TOOL = self-tool
 
 SRC_DIR   = src
 PKG_DIR   = pkg
@@ -15,7 +16,7 @@ BUILD_DIR = build
 $(shell mkdir -p $(BUILD_DIR))
 
 # Default target
-all: $(BUILD_DIR)/$(BPF_PROG) $(BUILD_DIR)/$(USER_PROG)
+all: $(BUILD_DIR)/$(BPF_PROG) $(BUILD_DIR)/$(USER_PROG) $(BUILD_DIR)/$(SELF_TOOL)
 
 # Compile eBPF program
 $(BUILD_DIR)/$(BPF_PROG): $(SRC_DIR)/ddos_protect.c
@@ -47,5 +48,9 @@ clean:
 clobber:
 	@echo "Removing entire build directory..."
 	rm -rf $(BUILD_DIR)
+
+# New target for self-tool
+$(BUILD_DIR)/$(SELF_TOOL): src/self_tool/self_tool.c
+	$(CC) $(USER_CFLAGS) -o $@ $< $(USER_LDFLAGS)
 
 .PHONY: all clean clobber self pkg product

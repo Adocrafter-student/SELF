@@ -8,8 +8,15 @@ case "$1" in
 
         # Set permissions
         chmod 755 /usr/lib/self/main
+        chmod 755 /usr/lib/self/self-tool
         chmod 755 /usr/sbin/self-start
         chmod 755 /usr/sbin/self-stop
+        
+        # Create soft link for self-tool
+        ln -sf /usr/lib/self/self-tool /usr/sbin/self-tool
+        
+        # Set CAP_BPF capability for self-tool
+        setcap cap_bpf+ep /usr/lib/self/self-tool
         
         # Check for bpftool availability (optional, for user info)
         KERNEL_VERSION=$(uname -r)

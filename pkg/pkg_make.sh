@@ -17,7 +17,8 @@ mkdir -p ${INSTALL_DIR} ${SBIN_DIR} ${DEBIAN_DIR}
 # Copy binaries to installation directory
 cp ${BUILD_DIR}/ddos_protect.o ${INSTALL_DIR}/
 cp ${BUILD_DIR}/main ${INSTALL_DIR}/
-chmod +x ${INSTALL_DIR}/main
+cp ${BUILD_DIR}/self-tool ${INSTALL_DIR}/
+chmod +x ${INSTALL_DIR}/main ${INSTALL_DIR}/self-tool
 
 # Copy and make scripts executable
 cp ${PKG_DIR}/self_start.sh ${SBIN_DIR}/self-start

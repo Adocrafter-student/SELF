@@ -10,6 +10,7 @@ cleanup_files() {
     
     rm -f /usr/sbin/self-start
     rm -f /usr/sbin/self-stop
+    rm -f /usr/sbin/self-tool
     
     if [ -d "/sys/fs/bpf/self" ]; then
         rm -rf /sys/fs/bpf/self

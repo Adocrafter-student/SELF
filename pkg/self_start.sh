@@ -18,6 +18,7 @@ fi
 
 # Start the main program
 echo "Starting SELF on interface $INTERFACE..."
-/usr/lib/self/main --interface="$INTERFACE"
+exec /usr/lib/self/main --interface="$INTERFACE"
 
+# This line will never be reached if exec succeeds
 echo "SELF started successfully" 

@@ -164,11 +164,6 @@ static int load_bpf_program(int test_only)
         return -1;
     }
 
-    // Note: Keep 'obj' alive for the lifetime of the program if you prefer
-    // or close it once the program is attached. In modern libbpf, it's often
-    // okay to close after successful attach:
-    // bpf_object__close(obj);
-
     return 0;
 }
 

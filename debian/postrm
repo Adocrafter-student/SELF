@@ -4,17 +4,13 @@
 cleanup_files() {
     echo "Cleaning up Self service files..."
     
-    # Remove PID file
     rm -f /var/run/self.pid
     
-    # Remove program files
     rm -rf /usr/lib/self
     
-    # Remove executable scripts
     rm -f /usr/sbin/self-start
     rm -f /usr/sbin/self-stop
     
-    # Clean up BPF maps if they exist
     if [ -d "/sys/fs/bpf/self" ]; then
         rm -rf /sys/fs/bpf/self
     fi
@@ -24,7 +20,6 @@ cleanup_files() {
 
 case "$1" in
     remove)
-        # Disable service if systemd is available
         if [ -x "$(command -v systemctl)" ]; then
             echo "Disabling Self service..."
             systemctl disable self.service || echo "Warning: Could not disable service"
@@ -32,13 +27,10 @@ case "$1" in
             systemctl daemon-reload
         fi
         
-        # Partial cleanup on remove
         cleanup_files
     ;;
     
     purge)
-        # Full cleanup on purge
-        # Remove service file if it still exists
         if [ -f "/etc/systemd/system/self.service" ]; then
             rm -f /etc/systemd/system/self.service
             if [ -x "$(command -v systemctl)" ]; then
@@ -46,10 +38,8 @@ case "$1" in
             fi
         fi
         
-        # Perform complete cleanup
         cleanup_files
         
-        # Remove any config files
         rm -rf /etc/self
     ;;
     
@@ -63,5 +53,4 @@ case "$1" in
     ;;
 esac
 
-# Always exit successfully
 exit 0 

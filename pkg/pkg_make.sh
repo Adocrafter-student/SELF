@@ -10,19 +10,6 @@ INSTALL_DIR="${TEMP_DIR}/usr/lib/self"
 SBIN_DIR="${TEMP_DIR}/usr/sbin"
 DEBIAN_DIR="${TEMP_DIR}/DEBIAN"
 
-# Clean previous build
-echo "Cleaning previous build..."
-rm -rf ${BUILD_DIR}
-mkdir -p ${BUILD_DIR}
-
-# Compile eBPF program
-echo "Compiling eBPF program..."
-clang -g -O2 -target bpf -c ${SRC_DIR}/ddos_protect.c -o ${BUILD_DIR}/ddos_protect.o
-
-# Compile user-space program
-echo "Compiling user-space program..."
-gcc -Wall -O2 -I/usr/include -I/usr/local/include -I/usr/include/bpf ${SRC_DIR}/main.c -o ${BUILD_DIR}/main -lelf -lbpf -lpthread -lz -lrt
-
 # Create package structure
 echo "Creating package structure..."
 mkdir -p ${INSTALL_DIR} ${SBIN_DIR} ${DEBIAN_DIR}

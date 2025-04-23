@@ -3,50 +3,36 @@
 
 case "$1" in
     configure)
+        # Ensure standard paths are available for commands like systemctl
+        export PATH="/usr/sbin:/usr/bin:/sbin:/bin"
+
         # Set permissions
         chmod 755 /usr/lib/self/main
         chmod 755 /usr/sbin/self-start
         chmod 755 /usr/sbin/self-stop
         
-        # Check for bpftool availability
+        # Check for bpftool availability (optional, for user info)
         KERNEL_VERSION=$(uname -r)
         BPFTOOL_FOUND=0
-        
-        # Try to find bpftool in various locations
         for path in "/usr/sbin/bpftool" "/usr/bin/bpftool" "/sbin/bpftool" \
                    "/bin/bpftool" "/usr/lib/linux-tools/${KERNEL_VERSION}/bpftool" \
                    "/usr/lib/linux-tools-${KERNEL_VERSION}/bpftool"; do
             if [ -x "$path" ]; then
-                echo "Found bpftool at $path"
                 BPFTOOL_FOUND=1
                 break
             fi
         done
-        
-        # If bpftool not found, suggest installing linux-tools
         if [ $BPFTOOL_FOUND -eq 0 ]; then
             echo "========================================================================"
-            echo "WARNING: bpftool not found. This is required for eBPF functionality."
-            echo "To install on Ubuntu 22.04, run:"
-            echo "  sudo apt-get install -y linux-tools-${KERNEL_VERSION} linux-tools-common"
+            echo "INFO: bpftool not found. Consider installing linux-tools for your kernel."
+            echo "      e.g., sudo apt-get install -y linux-tools-${KERNEL_VERSION} linux-tools-common"
             echo "========================================================================"
         fi
         
-        # Enable and start service
-        if [ -x "$(command -v systemctl)" ]; then
-            systemctl daemon-reload
-            systemctl enable self.service
-            echo "Self service enabled."
-            
-            # Try to start the service
-            if systemctl start self.service; then
-                echo "Self service started successfully."
-            else
-                echo "Failed to start Self service. Check logs with: journalctl -u self.service"
-                echo "Alternatively, try running manually: sudo /usr/sbin/self-start"
-            fi
-        else
-            echo "systemd is not available, service must be started manually."
+        # Enable and start service using deb-systemd helpers
+        if [ -d /run/systemd/system ]; then
+            /bin/systemctl enable self.service --quiet  || true
+            /bin/systemctl start  self.service --quiet  || true
         fi
     ;;
 

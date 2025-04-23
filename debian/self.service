@@ -1,6 +1,7 @@
 [Unit]
 Description=Self-learning firewall based on eBPF
 After=network.target
+Wants=network-online.target
 
 [Service]
 Type=forking

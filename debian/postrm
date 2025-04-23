@@ -1,19 +1,60 @@
 #!/bin/sh
-set -e
+# Removed set -e to prevent script from failing when commands fail
+
+cleanup_files() {
+    echo "Cleaning up Self service files..."
+    
+    # Remove PID file
+    rm -f /var/run/self.pid
+    
+    # Remove program files
+    rm -rf /usr/lib/self
+    
+    # Remove executable scripts
+    rm -f /usr/sbin/self-start
+    rm -f /usr/sbin/self-stop
+    
+    # Clean up BPF maps if they exist
+    if [ -d "/sys/fs/bpf/self" ]; then
+        rm -rf /sys/fs/bpf/self
+    fi
+    
+    echo "File cleanup completed."
+}
 
 case "$1" in
-    purge)
-        # Removing configurations and temporary files
-        rm -f /var/run/self.pid
-        
-        # Disable service
+    remove)
+        # Disable service if systemd is available
         if [ -x "$(command -v systemctl)" ]; then
-            systemctl disable self.service || true
+            echo "Disabling Self service..."
+            systemctl disable self.service || echo "Warning: Could not disable service"
+            rm -f /etc/systemd/system/self.service
             systemctl daemon-reload
         fi
+        
+        # Partial cleanup on remove
+        cleanup_files
     ;;
     
-    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+    purge)
+        # Full cleanup on purge
+        # Remove service file if it still exists
+        if [ -f "/etc/systemd/system/self.service" ]; then
+            rm -f /etc/systemd/system/self.service
+            if [ -x "$(command -v systemctl)" ]; then
+                systemctl daemon-reload
+            fi
+        fi
+        
+        # Perform complete cleanup
+        cleanup_files
+        
+        # Remove any config files
+        rm -rf /etc/self
+    ;;
+    
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        echo "No cleanup needed for action: $1"
     ;;
 
     *)
@@ -22,4 +63,5 @@ case "$1" in
     ;;
 esac
 
+# Always exit successfully
 exit 0 

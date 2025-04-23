@@ -1,27 +1,23 @@
 #!/bin/bash
 set -e
 
-# Check if user is root
-if [[ $EUID -ne 0 ]]; then
-   echo "This script must be run as root" 
-   exit 1
+# Default interface
+INTERFACE="eth0"
+
+# Check if running as root
+if [ "$(id -u)" -ne 0 ]; then
+    echo "This script must be run as root"
+    exit 1
 fi
 
-# Directory for BPF maps
-BPF_MOUNT="/sys/fs/bpf"
-if [ ! -d "$BPF_MOUNT" ]; then
-    echo "Creating bpf filesystem mount..."
-    mkdir -p "$BPF_MOUNT"
-    mount -t bpf bpf "$BPF_MOUNT"
+# Check if interface exists
+if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
+    echo "Interface $INTERFACE does not exist"
+    exit 1
 fi
 
-# Loading eBPF program
-PROG_DIR="/usr/lib/self"
-echo "Loading eBPF program..."
+# Start the main program
+echo "Starting SELF on interface $INTERFACE..."
+/usr/lib/self/main --interface="$INTERFACE"
 
-# Starting main program
-echo "Starting main program..."
-/usr/lib/self/main &
-echo $! > /var/run/self.pid
-
-echo "Service started." 
+echo "SELF started successfully" 

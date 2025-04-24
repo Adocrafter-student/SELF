@@ -11,7 +11,9 @@ enum ddos_event_code {
     EV_ERROR = 5,         // Error condition
     EV_DEBUG = 6,         // Debug information
     EV_MANUAL_BLOCK = 7,  // IP manually blocked
-    EV_MAX = 8            // Maximum event code
+    EV_HANDSHAKE_COMPLETE = 8, // TCP handshake completed
+    EV_ESTABLISHED = 9, // TCP established connection
+    EV_MAX = 10            // Maximum event code
 };
 
 // String mappings for event codes
@@ -24,6 +26,8 @@ static const char *ddos_event_strings[] = {
     [EV_ERROR] = "[kern] Error occurred",
     [EV_DEBUG] = "[kern] Debug information",
     [EV_MANUAL_BLOCK] = "[kern] IP manually blocked",
+    [EV_HANDSHAKE_COMPLETE] = "[kern] TCP handshake completed",
+    [EV_ESTABLISHED] = "[kern] TCP established connection",
     [EV_MAX] = "Unknown event"
 };
 

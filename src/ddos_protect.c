@@ -130,6 +130,36 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
         return XDP_PASS;
     }
 
+    // Fast path for established flows
+    void *l4hdr_fast = (void *)ip + sizeof(*ip);
+    if (l4hdr_fast + sizeof(struct tcphdr) > data_end) {
+        return XDP_PASS;
+    }
+
+    __u16 src_port = 0, dst_port = 0;
+    if (ip->protocol == IPPROTO_TCP) {
+        struct tcphdr *tcp = l4hdr_fast;
+        if ((void *)(tcp + 1) > data_end) {
+            return XDP_PASS;
+        }
+        src_port = tcp->source;
+        dst_port = tcp->dest;
+    } else if (ip->protocol == IPPROTO_UDP) {
+        struct udphdr *udp = l4hdr_fast;
+        if ((void *)(udp + 1) > data_end) {
+            return XDP_PASS;
+        }
+        src_port = udp->source;
+        dst_port = udp->dest;
+    }
+
+    struct flow_key fk = { ip->saddr, ip->daddr, src_port, dst_port, ip->protocol };
+    __u64 *est = bpf_map_lookup_elem(&established_map, &fk);
+    if (est) {
+        log_event(ctx, LOG_LEVEL_INFO, fk.src_ip, 0, EV_ESTABLISHED);
+        return XDP_PASS;
+    }
+
     // Check if IP is blocked
     __u64 *block_until = bpf_map_lookup_elem(&blocked_ips_map, &ip->saddr);
     if (block_until) {
@@ -164,6 +194,27 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
             return XDP_PASS;
         }
         key.port = tcp->source;
+
+        // Track SYN packets
+        if (tcp->syn && !tcp->ack) {
+            struct flow_key fk = { ip->saddr, ip->daddr, tcp->source, tcp->dest, IPPROTO_TCP };
+            __u64 now = bpf_ktime_get_ns();
+            bpf_map_update_elem(&syn_map, &fk, &now, BPF_ANY);
+        }
+
+        // Detect handshake completion
+        if (tcp->ack && !tcp->syn) {
+            struct flow_key fk = { ip->saddr, ip->daddr, tcp->source, tcp->dest, IPPROTO_TCP };
+            __u64 *syn_ts = bpf_map_lookup_elem(&syn_map, &fk);
+            if (syn_ts) {
+                __u64 one = 1;
+                bpf_map_delete_elem(&syn_map, &fk);
+                bpf_map_update_elem(&established_map, &fk, &one, BPF_ANY);
+
+                log_event(ctx, LOG_LEVEL_INFO, fk.src_ip, 0, EV_HANDSHAKE_COMPLETE);
+            }
+        }
+
     } else if (ip->protocol == IPPROTO_UDP) {
         struct udphdr *udp = l4hdr;
         if ((void *)(udp + 1) > data_end) {

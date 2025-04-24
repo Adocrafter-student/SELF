@@ -67,6 +67,31 @@ struct {
     __type(value, __u64); // Block until timestamp (0 = permanent)
 } blocked_ips_map SEC(".maps");
 
+// Tracks half-open SYNs: key = 4-tuple, value = __u64 timestamp
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1000000);
+    __type(key, struct flow_key);
+    __type(value, __u64);
+} syn_map SEC(".maps");
+
+// Tracks fully established flows: key = 4-tuple, value = __u64 flag
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1000000);
+    __type(key, struct flow_key);
+    __type(value, __u64);
+} established_map SEC(".maps");
+
+// 4-tuple key for TCP/UDP flow
+struct flow_key {
+    __u32 src_ip;
+    __u32 dst_ip;
+    __u16 src_port;
+    __u16 dst_port;
+    __u8 proto;
+};
+
 // Helper function to log events
 static __always_inline void log_event(struct xdp_md *ctx,
                                      __u32 level,
@@ -170,12 +195,14 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
         stats->last_seen = now;
 
         // If above threshold, block
+#if 0
         if (stats->packet_count > PACKET_THRESHOLD) {
             stats->blocked += 1;
             bpf_map_update_elem(&ip_traffic_map, &key, stats, BPF_ANY);
             log_event(ctx, LOG_LEVEL_WARNING, key.ip, stats->packet_count, EV_BLOCK);
             return XDP_DROP;
         }
+#endif
 
         bpf_map_update_elem(&ip_traffic_map, &key, stats, BPF_ANY);
     } else {

@@ -30,6 +30,14 @@ cleanup_files() {
     if [ -f "/sys/fs/bpf/log_buffer" ]; then
         rm -f /sys/fs/bpf/log_buffer
     fi
+    # Remove the syn_map
+    if [ -f "/sys/fs/bpf/syn_map" ]; then
+        rm -f /sys/fs/bpf/syn_map
+    fi
+    # Remove the established_map
+    if [ -f "/sys/fs/bpf/established_map" ]; then
+        rm -f /sys/fs/bpf/established_map
+    fi
 
     echo "File cleanup completed."
 }

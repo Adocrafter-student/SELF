@@ -30,6 +30,8 @@
 #define BPF_OBJ_PATH "/usr/lib/self/ddos_protect.o"
 #define DEFAULT_INTERFACE "eth0"
 #define BLOCKED_IPS_MAP_PATH "/sys/fs/bpf/blocked_ips_map"
+#define SYN_MAP_PATH "/sys/fs/bpf/syn_map"
+#define ESTABLISHED_MAP_PATH "/sys/fs/bpf/established_map"
 
 // Key for the map
 struct ip_key {
@@ -171,6 +173,8 @@ static void cleanup_pinned_maps(void)
         "/sys/fs/bpf/log_buffer",
         "/sys/fs/bpf/ip_traffic_map",
         BLOCKED_IPS_MAP_PATH,
+        SYN_MAP_PATH,
+        ESTABLISHED_MAP_PATH,
         NULL
     };
 
@@ -336,6 +340,50 @@ static int load_bpf_program(int test_only)
         LOG_INFO("Blocked IPs map pinned successfully to %s", BLOCKED_IPS_MAP_PATH);
     } else {
         LOG_INFO("Blocked IPs map already exists at %s", BLOCKED_IPS_MAP_PATH);
+    }
+
+    // Pin the syn_map
+    struct bpf_map *syn_map = bpf_object__find_map_by_name(obj, "syn_map");
+    if (!syn_map) {
+        LOG_ERROR("Failed to find map 'syn_map'");
+        goto cleanup;
+    }
+    int syn_map_fd = bpf_map__fd(syn_map);
+    if (syn_map_fd < 0) {
+        LOG_ERROR("Invalid syn_map fd");
+        goto cleanup;
+    }
+    if (access(SYN_MAP_PATH, F_OK) != 0) {
+        if (bpf_obj_pin(syn_map_fd, SYN_MAP_PATH)) {
+            LOG_ERROR("Failed to pin syn_map: %s", strerror(errno));
+            bpf_object__close(obj);
+            return -1;
+        }
+        LOG_INFO("syn_map pinned successfully to %s", SYN_MAP_PATH);
+    } else {
+        LOG_INFO("syn_map already exists at %s", SYN_MAP_PATH);
+    }
+
+    // Pin the established_map
+    struct bpf_map *established_map = bpf_object__find_map_by_name(obj, "established_map");
+    if (!established_map) {
+        LOG_ERROR("Failed to find map 'established_map'");
+        goto cleanup;
+    }
+    int established_map_fd = bpf_map__fd(established_map);
+    if (established_map_fd < 0) {
+        LOG_ERROR("Invalid established_map fd");
+        goto cleanup;
+    }
+    if (access(ESTABLISHED_MAP_PATH, F_OK) != 0) {
+        if (bpf_obj_pin(established_map_fd, ESTABLISHED_MAP_PATH)) {
+            LOG_ERROR("Failed to pin established_map: %s", strerror(errno));
+            bpf_object__close(obj);
+            return -1;
+        }
+        LOG_INFO("established_map pinned successfully to %s", ESTABLISHED_MAP_PATH);
+    } else {
+        LOG_INFO("established_map already exists at %s", ESTABLISHED_MAP_PATH);
     }
 
     if (test_only) {

@@ -179,6 +179,26 @@ static int list_blocked_ips(int map_fd) {
     return 0;
 }
 
+static int unblock_ip(int map_fd, const char *ip_str) {
+    struct in_addr addr;
+    if (inet_pton(AF_INET, ip_str, &addr) != 1) {
+        printf("Invalid IP address: %s\n", ip_str);
+        return -1;
+    }
+
+    if (bpf_map_delete_elem(map_fd, &addr.s_addr) != 0) {
+        if (errno == ENOENT) {
+            printf("IP %s is not currently blocked\n", ip_str);
+        } else {
+            printf("Failed to unblock IP: %s\n", strerror(errno));
+        }
+        return -1;
+    }
+
+    printf("IP %s unblocked successfully\n", ip_str);
+    return 0;
+}
+
 static void print_usage(const char *prog_name) {
     printf("Usage: %s <command> [options]\n", prog_name);
     printf("Commands:\n");
@@ -187,11 +207,14 @@ static void print_usage(const char *prog_name) {
     printf("  stats         - Show overall statistics\n");
     printf("  block         - Block an IP address\n");
     printf("  list-blocked  - List all currently blocked IP addresses\n");
+    printf("  unblock       - Unblock an IP address\n");
     printf("\nBlock command usage:\n");
     printf("  %s block <ip> [duration]\n", prog_name);
     printf("  duration format: 2d13h14m5s (days, hours, minutes, seconds)\n");
     printf("  If duration is not specified, IP will be blocked permanently\n");
     printf("  Maximum block duration is 30 days\n");
+    printf("\nUnblock command usage:\n");
+    printf("  %s unblock <ip>\n", prog_name);
 }
 
 static int list_entries(int map_fd) {
@@ -291,6 +314,13 @@ int main(int argc, char **argv) {
         cmd = SELF_TOOL_CMD_BLOCK;
     } else if (strcmp(argv[1], "list-blocked") == 0) {
         cmd = SELF_TOOL_CMD_LIST_BLOCKED;
+    } else if (strcmp(argv[1], "unblock") == 0) {
+        if (argc < 3) {
+            printf("Error: IP address required for unblock command\n");
+            print_usage(argv[0]);
+            return 1;
+        }
+        cmd = SELF_TOOL_CMD_UNBLOCK;
     } else {
         printf("Unknown command: %s\n", argv[1]);
         print_usage(argv[0]);
@@ -327,6 +357,9 @@ int main(int argc, char **argv) {
             break;
         case SELF_TOOL_CMD_LIST_BLOCKED:
             err = list_blocked_ips(blocked_map_fd);
+            break;
+        case SELF_TOOL_CMD_UNBLOCK:
+            err = unblock_ip(blocked_map_fd, argv[2]);
             break;
         default:
             err = 1;

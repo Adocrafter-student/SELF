@@ -44,6 +44,7 @@ struct traffic_stats {
     __u64 last_seen;
     __u64 bytes;
     __u64 blocked;
+    __u64 block_until;  // Timestamp kada blokada ističe (0 = permanentna)
 };
 
 // Constants for simple rate-limiting
@@ -57,6 +58,14 @@ struct {
     __type(key, struct ip_key);
     __type(value, struct traffic_stats);
 } ip_traffic_map SEC(".maps");
+
+// eBPF Hash Map for storing blocked IPs
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1000000);
+    __type(key, __u32);  // IP address
+    __type(value, __u64); // Block until timestamp (0 = permanent)
+} blocked_ips_map SEC(".maps");
 
 // Helper function to log events
 static __always_inline void log_event(struct xdp_md *ctx,
@@ -94,6 +103,21 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
     struct iphdr *ip = (struct iphdr *)(eth + 1);
     if ((void *)(ip + 1) > data_end) {
         return XDP_PASS;
+    }
+
+    // Check if IP is blocked
+    __u64 *block_until = bpf_map_lookup_elem(&blocked_ips_map, &ip->saddr);
+    if (block_until) {
+        __u64 now = bpf_ktime_get_ns();
+        if (*block_until == 0 || now < *block_until) {
+            // IP is blocked, drop the packet
+            log_event(ctx, LOG_LEVEL_WARNING, ip->saddr, 0, EV_MANUAL_BLOCK);
+            return XDP_DROP;
+        } else {
+            // Block has expired, remove from blocked map and log the unblock
+            bpf_map_delete_elem(&blocked_ips_map, &ip->saddr);
+            log_event(ctx, LOG_LEVEL_INFO, ip->saddr, 0, EV_UNBLOCK);
+        }
     }
 
     // Prepare the map key

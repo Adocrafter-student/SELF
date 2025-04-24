@@ -10,8 +10,8 @@
 
 static FILE *log_file = NULL;
 static int verbose = 0;
+static log_level_t current_level = LOG_INFO;  // Default log level
 
-// Convert log level to string
 static const char* level_to_string(log_level_t level) {
     switch (level) {
         case LOG_DEBUG:   return "DEBUG";
@@ -23,7 +23,6 @@ static const char* level_to_string(log_level_t level) {
 }
 
 int logger_init(void) {
-    // Create log file if it doesn't exist
     int fd = open(LOG_FILE, O_CREAT | O_WRONLY | O_APPEND, 0644);
     if (fd == -1) {
         fprintf(stderr, "Failed to open log file: %s\n", strerror(errno));
@@ -31,7 +30,6 @@ int logger_init(void) {
     }
     close(fd);
 
-    // Open log file for writing
     log_file = fopen(LOG_FILE, "a");
     if (!log_file) {
         fprintf(stderr, "Failed to open log file for writing: %s\n", strerror(errno));
@@ -50,32 +48,29 @@ void logger_close(void) {
 
 void logger_log(log_level_t level, const char *format, ...) {
     if (!log_file) return;
+    
+    // Skip logging if level is below current level
+    if (level < current_level) return;
 
     char buffer[LOG_BUFFER_SIZE];
     time_t now;
     struct tm *timeinfo;
     va_list args;
 
-    // Get current time
     time(&now);
     timeinfo = localtime(&now);
 
-    // Format timestamp
     strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", timeinfo);
-
-    // Write timestamp and log level
+    
     fprintf(log_file, "[%s] [%s] ", buffer, level_to_string(level));
 
-    // Write the actual message
     va_start(args, format);
     vfprintf(log_file, format, args);
     va_end(args);
 
-    // Add newline and flush
     fprintf(log_file, "\n");
     fflush(log_file);
 
-    // If verbose mode is enabled, also print to stdout/stderr
     if (verbose) {
         if (level == LOG_ERROR || level == LOG_WARNING) {
             va_start(args, format);
@@ -91,7 +86,10 @@ void logger_log(log_level_t level, const char *format, ...) {
     }
 }
 
-// Set verbose mode
 void logger_set_verbose(int v) {
     verbose = v;
+}
+
+void logger_set_level(log_level_t level) {
+    current_level = level;
 } 

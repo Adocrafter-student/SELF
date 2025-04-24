@@ -29,6 +29,7 @@
 
 #define BPF_OBJ_PATH "/usr/lib/self/ddos_protect.o"
 #define DEFAULT_INTERFACE "eth0"
+#define BLOCKED_IPS_MAP_PATH "/sys/fs/bpf/blocked_ips_map"
 
 // Key for the map
 struct ip_key {
@@ -49,9 +50,8 @@ struct log_entry {
     __u32 level;
     __u32 ip;
     __u64 packets;
-    char msg[64];
+    __u8 code;      // Event code from ddos_event_code enum
     __u64 timestamp;
-    __u32 code;
 };
 
 // Globals
@@ -170,6 +170,7 @@ static void cleanup_pinned_maps(void)
     const char *map_paths[] = {
         "/sys/fs/bpf/log_buffer",
         "/sys/fs/bpf/ip_traffic_map",
+        BLOCKED_IPS_MAP_PATH,
         NULL
     };
 
@@ -313,6 +314,30 @@ static int load_bpf_program(int test_only)
         goto cleanup;
     }
 
+    // Pin the blocked IPs map to the filesystem only if it doesn't exist
+    struct bpf_map *blocked_map = bpf_object__find_map_by_name(obj, "blocked_ips_map");
+    if (!blocked_map) {
+        LOG_ERROR("Failed to find blocked IPs map");
+        goto cleanup;
+    }
+
+    int blocked_map_fd = bpf_map__fd(blocked_map);
+    if (blocked_map_fd < 0) {
+        LOG_ERROR("Failed to get blocked IPs map fd");
+        goto cleanup;
+    }
+
+    if (access(BLOCKED_IPS_MAP_PATH, F_OK) != 0) {
+        if (bpf_obj_pin(blocked_map_fd, BLOCKED_IPS_MAP_PATH)) {
+            LOG_ERROR("Failed to pin blocked IPs map: %s", strerror(errno));
+            bpf_object__close(obj);
+            return -1;
+        }
+        LOG_INFO("Blocked IPs map pinned successfully to %s", BLOCKED_IPS_MAP_PATH);
+    } else {
+        LOG_INFO("Blocked IPs map already exists at %s", BLOCKED_IPS_MAP_PATH);
+    }
+
     if (test_only) {
         LOG_INFO("Test mode: BPF program loaded successfully. Not attaching to interface.");
         bpf_object__close(obj);
@@ -393,11 +418,12 @@ int main(int argc, char **argv)
 {
     int test_mode = 0;
     
-    // Initialize logger
+    // Initialize logger with INFO level
     if (logger_init() != 0) {
         fprintf(stderr, "Failed to initialize logger\n");
         return EXIT_FAILURE;
     }
+    logger_set_level(LOG_LEVEL_INFO);  // Set default log level to INFO
     
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--test") == 0) {
@@ -405,6 +431,7 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[i], "--verbose") == 0) {
             verbose = 1;
             logger_set_verbose(1);
+            logger_set_level(LOG_LEVEL_DEBUG);  // Set to DEBUG if verbose mode
         } else if (strncmp(argv[i], "--interface=", 12) == 0) {
             strncpy(interface, argv[i] + 12, IF_NAMESIZE - 1);
             interface[IF_NAMESIZE - 1] = '\0';

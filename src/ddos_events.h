@@ -9,7 +9,9 @@ enum ddos_event_code {
     EV_UNBLOCK = 3,       // IP unblocked after cooldown
     EV_STATS_UPDATE = 4,  // Traffic statistics update
     EV_ERROR = 5,         // Error condition
-    EV_DEBUG = 6          // Debug information
+    EV_DEBUG = 6,         // Debug information
+    EV_MANUAL_BLOCK = 7,  // IP manually blocked
+    EV_MAX = 8            // Maximum event code
 };
 
 // String mappings for event codes
@@ -20,7 +22,9 @@ static const char *ddos_event_strings[] = {
     [EV_UNBLOCK] = "[kern] IP unblocked - cooldown period ended",
     [EV_STATS_UPDATE] = "[kern] Traffic statistics updated",
     [EV_ERROR] = "[kern] Error occurred",
-    [EV_DEBUG] = "[kern] Debug information"
+    [EV_DEBUG] = "[kern] Debug information",
+    [EV_MANUAL_BLOCK] = "[kern] IP manually blocked",
+    [EV_MAX] = "Unknown event"
 };
 
 #endif // DDOS_EVENTS_H 

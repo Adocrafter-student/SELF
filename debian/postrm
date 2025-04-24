@@ -22,7 +22,15 @@ cleanup_files() {
     if [ -f "/sys/fs/bpf/ip_traffic_map" ]; then
         rm -f /sys/fs/bpf/ip_traffic_map
     fi
-    
+    # Remove the blocked_ips_map
+    if [ -f "/sys/fs/bpf/blocked_ips_map" ]; then
+        rm -f /sys/fs/bpf/blocked_ips_map
+    fi
+    # Remove the log_buffer
+    if [ -f "/sys/fs/bpf/log_buffer" ]; then
+        rm -f /sys/fs/bpf/log_buffer
+    fi
+
     echo "File cleanup completed."
 }
 

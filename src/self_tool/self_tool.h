@@ -12,6 +12,7 @@ enum self_tool_cmd {
     SELF_TOOL_CMD_BLOCK,
     SELF_TOOL_CMD_LIST_BLOCKED,
     SELF_TOOL_CMD_UNBLOCK,
+    SELF_TOOL_CMD_ESTABLISHED,
     SELF_TOOL_CMD_MAX
 };
 
@@ -27,6 +28,15 @@ struct traffic_stats {
     uint64_t bytes;
     uint64_t blocked;
     uint64_t block_until;  // Timestamp kada blokada ističe (0 = permanentna)
+};
+
+// 4-tuple key for TCP/UDP flow (mora odgovarati BPF struct)
+struct flow_key {
+    uint32_t src_ip;
+    uint32_t dst_ip;
+    uint16_t src_port;
+    uint16_t dst_port;
+    uint8_t  proto;
 };
 
 #endif // SELF_TOOL_H 

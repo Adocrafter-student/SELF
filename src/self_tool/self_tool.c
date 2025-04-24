@@ -10,6 +10,7 @@
 
 #define MAP_PATH "/sys/fs/bpf/ip_traffic_map"
 #define BLOCKED_IPS_MAP_PATH "/sys/fs/bpf/blocked_ips_map"
+#define ESTABLISHED_MAP_PATH "/sys/fs/bpf/established_map"
 #define BPF_OBJ_PATH "/usr/lib/self/ddos_protect.o"
 
 // Funkcije za formatiranje izlaza
@@ -199,6 +200,42 @@ static int unblock_ip(int map_fd, const char *ip_str) {
     return 0;
 }
 
+static int list_established_flows(int map_fd) {
+    struct flow_key key = {0}, next_key;
+    __u64 value;
+    int ret, count = 0;
+    char src_ip[INET_ADDRSTRLEN];
+    char dst_ip[INET_ADDRSTRLEN];
+
+    printf("Listing all established flows:\n");
+    printf("----------------------------------------\n");
+
+    while ((ret = bpf_map_get_next_key(map_fd, &key, &next_key)) == 0) {
+        if (bpf_map_lookup_elem(map_fd, &next_key, &value) == 0) {
+            struct in_addr src_addr = {.s_addr = next_key.src_ip};
+            struct in_addr dst_addr = {.s_addr = next_key.dst_ip};
+            inet_ntop(AF_INET, &src_addr, src_ip, sizeof(src_ip));
+            inet_ntop(AF_INET, &dst_addr, dst_ip, sizeof(dst_ip));
+
+            printf("Flow: %s:%u -> %s:%u (proto: %u)\n",
+                   src_ip, ntohs(next_key.src_port),
+                   dst_ip, ntohs(next_key.dst_port),
+                   next_key.proto);
+            printf("----------------------------------------\n");
+            count++;
+        }
+        key = next_key;
+    }
+
+    if (count == 0) {
+        printf("No established flows found.\n");
+    } else {
+        printf("Total established flows: %d\n", count);
+    }
+
+    return 0;
+}
+
 static void print_usage(const char *prog_name) {
     printf("Usage: %s <command> [options]\n", prog_name);
     printf("Commands:\n");
@@ -208,6 +245,7 @@ static void print_usage(const char *prog_name) {
     printf("  block         - Block an IP address\n");
     printf("  list-blocked  - List all currently blocked IP addresses\n");
     printf("  unblock       - Unblock an IP address\n");
+    printf("  established   - List all established TCP flows\n");
     printf("\nBlock command usage:\n");
     printf("  %s block <ip> [duration]\n", prog_name);
     printf("  duration format: 2d13h14m5s (days, hours, minutes, seconds)\n");
@@ -290,7 +328,7 @@ static int show_stats(int map_fd) {
 }
 
 int main(int argc, char **argv) {
-    int map_fd, blocked_map_fd, err;
+    int map_fd, blocked_map_fd, established_map_fd, err;
     enum self_tool_cmd cmd;
 
     if (argc < 2) {
@@ -321,6 +359,8 @@ int main(int argc, char **argv) {
             return 1;
         }
         cmd = SELF_TOOL_CMD_UNBLOCK;
+    } else if (strcmp(argv[1], "established") == 0) {
+        cmd = SELF_TOOL_CMD_ESTABLISHED;
     } else {
         printf("Unknown command: %s\n", argv[1]);
         print_usage(argv[0]);
@@ -338,6 +378,14 @@ int main(int argc, char **argv) {
     if (blocked_map_fd < 0) {
         printf("Failed to open blocked IPs map: %s\n", strerror(-blocked_map_fd));
         close(map_fd);
+        return 1;
+    }
+
+    established_map_fd = bpf_obj_get(ESTABLISHED_MAP_PATH);
+    if (established_map_fd < 0) {
+        printf("Failed to open established flows map: %s\n", strerror(-established_map_fd));
+        close(map_fd);
+        close(blocked_map_fd);
         return 1;
     }
 
@@ -361,6 +409,9 @@ int main(int argc, char **argv) {
         case SELF_TOOL_CMD_UNBLOCK:
             err = unblock_ip(blocked_map_fd, argv[2]);
             break;
+        case SELF_TOOL_CMD_ESTABLISHED:
+            err = list_established_flows(established_map_fd);
+            break;
         default:
             err = 1;
             break;
@@ -368,5 +419,6 @@ int main(int argc, char **argv) {
 
     close(map_fd);
     close(blocked_map_fd);
+    close(established_map_fd);
     return err;
 } 

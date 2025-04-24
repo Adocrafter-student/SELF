@@ -11,6 +11,7 @@
 #define MAP_PATH "/sys/fs/bpf/ip_traffic_map"
 #define BLOCKED_IPS_MAP_PATH "/sys/fs/bpf/blocked_ips_map"
 #define ESTABLISHED_MAP_PATH "/sys/fs/bpf/established_map"
+#define SCORE_MAP_PATH "/sys/fs/bpf/score_map"
 #define BPF_OBJ_PATH "/usr/lib/self/ddos_protect.o"
 
 // Funkcije za formatiranje izlaza
@@ -236,6 +237,37 @@ static int list_established_flows(int map_fd) {
     return 0;
 }
 
+static int list_scores(int map_fd) {
+    __u32 key = 0, next_key;
+    __u8 score;
+    int ret, count = 0;
+    char ip_str[INET_ADDRSTRLEN];
+
+    printf("Listing all IP scores:\n");
+    printf("----------------------------------------\n");
+
+    while ((ret = bpf_map_get_next_key(map_fd, &key, &next_key)) == 0) {
+        if (bpf_map_lookup_elem(map_fd, &next_key, &score) == 0) {
+            struct in_addr addr = {.s_addr = next_key};
+            inet_ntop(AF_INET, &addr, ip_str, sizeof(ip_str));
+            
+            printf("IP: %s\n", ip_str);
+            printf("  Score: %u/100\n", score);
+            printf("----------------------------------------\n");
+            count++;
+        }
+        key = next_key;
+    }
+
+    if (count == 0) {
+        printf("No IP scores found.\n");
+    } else {
+        printf("Total IPs with scores: %d\n", count);
+    }
+
+    return 0;
+}
+
 static void print_usage(const char *prog_name) {
     printf("Usage: %s <command> [options]\n", prog_name);
     printf("Commands:\n");
@@ -246,6 +278,7 @@ static void print_usage(const char *prog_name) {
     printf("  list-blocked  - List all currently blocked IP addresses\n");
     printf("  unblock       - Unblock an IP address\n");
     printf("  established   - List all established TCP flows\n");
+    printf("  scores        - List all IP scores\n");
     printf("\nBlock command usage:\n");
     printf("  %s block <ip> [duration]\n", prog_name);
     printf("  duration format: 2d13h14m5s (days, hours, minutes, seconds)\n");
@@ -328,7 +361,7 @@ static int show_stats(int map_fd) {
 }
 
 int main(int argc, char **argv) {
-    int map_fd, blocked_map_fd, established_map_fd, err;
+    int map_fd, blocked_map_fd, established_map_fd, score_map_fd, err;
     enum self_tool_cmd cmd;
 
     if (argc < 2) {
@@ -361,6 +394,8 @@ int main(int argc, char **argv) {
         cmd = SELF_TOOL_CMD_UNBLOCK;
     } else if (strcmp(argv[1], "established") == 0) {
         cmd = SELF_TOOL_CMD_ESTABLISHED;
+    } else if (strcmp(argv[1], "scores") == 0) {
+        cmd = SELF_TOOL_CMD_SCORES;
     } else {
         printf("Unknown command: %s\n", argv[1]);
         print_usage(argv[0]);
@@ -389,6 +424,15 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    score_map_fd = bpf_obj_get(SCORE_MAP_PATH);
+    if (score_map_fd < 0) {
+        printf("Failed to open score map: %s\n", strerror(-score_map_fd));
+        close(map_fd);
+        close(blocked_map_fd);
+        close(established_map_fd);
+        return 1;
+    }
+
     // Execute command
     switch (cmd) {
         case SELF_TOOL_CMD_LIST:
@@ -412,6 +456,9 @@ int main(int argc, char **argv) {
         case SELF_TOOL_CMD_ESTABLISHED:
             err = list_established_flows(established_map_fd);
             break;
+        case SELF_TOOL_CMD_SCORES:
+            err = list_scores(score_map_fd);
+            break;
         default:
             err = 1;
             break;
@@ -420,5 +467,6 @@ int main(int argc, char **argv) {
     close(map_fd);
     close(blocked_map_fd);
     close(established_map_fd);
+    close(score_map_fd);
     return err;
 } 

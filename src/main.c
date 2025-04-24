@@ -32,6 +32,7 @@
 #define BLOCKED_IPS_MAP_PATH "/sys/fs/bpf/blocked_ips_map"
 #define SYN_MAP_PATH "/sys/fs/bpf/syn_map"
 #define ESTABLISHED_MAP_PATH "/sys/fs/bpf/established_map"
+#define SCORE_MAP_PATH "/sys/fs/bpf/score_map"
 
 // Key for the map
 struct ip_key {
@@ -175,6 +176,7 @@ static void cleanup_pinned_maps(void)
         BLOCKED_IPS_MAP_PATH,
         SYN_MAP_PATH,
         ESTABLISHED_MAP_PATH,
+        SCORE_MAP_PATH,
         NULL
     };
 
@@ -188,6 +190,36 @@ static void cleanup_pinned_maps(void)
             }
         }
     }
+}
+
+// Helper for pinning BPF maps
+static int pin_bpf_map(struct bpf_object *obj, const char *map_name, const char *pin_path) {
+    struct bpf_map *map = bpf_object__find_map_by_name(obj, map_name);
+    if (!map) {
+        LOG_ERROR("Failed to find map '%s'", map_name);
+        return -1;
+    }
+    int fd = bpf_map__fd(map);
+    if (fd < 0) {
+        LOG_ERROR("Invalid fd for map '%s'", map_name);
+        return -1;
+    }
+    if (access(pin_path, F_OK) != 0) {
+        if (bpf_obj_pin(fd, pin_path)) {
+            LOG_ERROR("Failed to pin map '%s': %s", map_name, strerror(errno));
+            return -1;
+        }
+        LOG_INFO("%s pinned successfully to %s", map_name, pin_path);
+    } else {
+        LOG_INFO("%s already exists at %s", map_name, pin_path);
+    }
+
+    if (strcmp(map_name, "ip_traffic_map") == 0) {
+        map_fd = fd;
+        LOG_INFO("ip_traffic_map fd is %d", map_fd);
+    }
+
+    return 0;
 }
 
 // Function to load and attach the BPF program
@@ -239,32 +271,13 @@ static int load_bpf_program(int test_only)
         return -1;
     }
 
-    // 5) Locate the map "ip_traffic_map"
-    struct bpf_map *map = bpf_object__find_map_by_name(obj, "ip_traffic_map");
-    if (!map) {
-        LOG_ERROR("Failed to find map 'ip_traffic_map'");
-        bpf_object__close(obj);
-        return -1;
-    }
-    map_fd = bpf_map__fd(map);
-    if (map_fd < 0) {
-        LOG_ERROR("Invalid map fd");
-        bpf_object__close(obj);
-        return -1;
-    }
-    LOG_INFO("Map opened successfully, fd: %d", map_fd);
-
-    // Pin the map to the filesystem only if it doesn't exist
-    if (access("/sys/fs/bpf/ip_traffic_map", F_OK) != 0) {
-        if (bpf_obj_pin(map_fd, "/sys/fs/bpf/ip_traffic_map")) {
-            LOG_ERROR("Failed to pin map: %s", strerror(errno));
-            bpf_object__close(obj);
-            return -1;
-        }
-        LOG_INFO("Map pinned successfully to /sys/fs/bpf/ip_traffic_map");
-    } else {
-        LOG_INFO("Map already exists at /sys/fs/bpf/ip_traffic_map");
-    }
+    // Pin all relevant maps using the helper
+    if (pin_bpf_map(obj, "ip_traffic_map", "/sys/fs/bpf/ip_traffic_map") < 0) goto cleanup;
+    if (pin_bpf_map(obj, "log_buffer", "/sys/fs/bpf/log_buffer") < 0) goto cleanup;
+    if (pin_bpf_map(obj, "blocked_ips_map", BLOCKED_IPS_MAP_PATH) < 0) goto cleanup;
+    if (pin_bpf_map(obj, "syn_map", SYN_MAP_PATH) < 0) goto cleanup;
+    if (pin_bpf_map(obj, "established_map", ESTABLISHED_MAP_PATH) < 0) goto cleanup;
+    if (pin_bpf_map(obj, "score_map", SCORE_MAP_PATH) < 0) goto cleanup;
 
     // Get log buffer map
     struct bpf_map *log_map = bpf_object__find_map_by_name(obj, "log_buffer");
@@ -318,81 +331,7 @@ static int load_bpf_program(int test_only)
         goto cleanup;
     }
 
-    // Pin the blocked IPs map to the filesystem only if it doesn't exist
-    struct bpf_map *blocked_map = bpf_object__find_map_by_name(obj, "blocked_ips_map");
-    if (!blocked_map) {
-        LOG_ERROR("Failed to find blocked IPs map");
-        goto cleanup;
-    }
-
-    int blocked_map_fd = bpf_map__fd(blocked_map);
-    if (blocked_map_fd < 0) {
-        LOG_ERROR("Failed to get blocked IPs map fd");
-        goto cleanup;
-    }
-
-    if (access(BLOCKED_IPS_MAP_PATH, F_OK) != 0) {
-        if (bpf_obj_pin(blocked_map_fd, BLOCKED_IPS_MAP_PATH)) {
-            LOG_ERROR("Failed to pin blocked IPs map: %s", strerror(errno));
-            bpf_object__close(obj);
-            return -1;
-        }
-        LOG_INFO("Blocked IPs map pinned successfully to %s", BLOCKED_IPS_MAP_PATH);
-    } else {
-        LOG_INFO("Blocked IPs map already exists at %s", BLOCKED_IPS_MAP_PATH);
-    }
-
-    // Pin the syn_map
-    struct bpf_map *syn_map = bpf_object__find_map_by_name(obj, "syn_map");
-    if (!syn_map) {
-        LOG_ERROR("Failed to find map 'syn_map'");
-        goto cleanup;
-    }
-    int syn_map_fd = bpf_map__fd(syn_map);
-    if (syn_map_fd < 0) {
-        LOG_ERROR("Invalid syn_map fd");
-        goto cleanup;
-    }
-    if (access(SYN_MAP_PATH, F_OK) != 0) {
-        if (bpf_obj_pin(syn_map_fd, SYN_MAP_PATH)) {
-            LOG_ERROR("Failed to pin syn_map: %s", strerror(errno));
-            bpf_object__close(obj);
-            return -1;
-        }
-        LOG_INFO("syn_map pinned successfully to %s", SYN_MAP_PATH);
-    } else {
-        LOG_INFO("syn_map already exists at %s", SYN_MAP_PATH);
-    }
-
-    // Pin the established_map
-    struct bpf_map *established_map = bpf_object__find_map_by_name(obj, "established_map");
-    if (!established_map) {
-        LOG_ERROR("Failed to find map 'established_map'");
-        goto cleanup;
-    }
-    int established_map_fd = bpf_map__fd(established_map);
-    if (established_map_fd < 0) {
-        LOG_ERROR("Invalid established_map fd");
-        goto cleanup;
-    }
-    if (access(ESTABLISHED_MAP_PATH, F_OK) != 0) {
-        if (bpf_obj_pin(established_map_fd, ESTABLISHED_MAP_PATH)) {
-            LOG_ERROR("Failed to pin established_map: %s", strerror(errno));
-            bpf_object__close(obj);
-            return -1;
-        }
-        LOG_INFO("established_map pinned successfully to %s", ESTABLISHED_MAP_PATH);
-    } else {
-        LOG_INFO("established_map already exists at %s", ESTABLISHED_MAP_PATH);
-    }
-
-    if (test_only) {
-        LOG_INFO("Test mode: BPF program loaded successfully. Not attaching to interface.");
-        bpf_object__close(obj);
-        return 0;
-    }
-
-    //Attach the XDP program to the specified interface
+    // Attach the XDP program to the specified interface
     LOG_INFO("Attaching to interface: %s", interface);
     if (attach_xdp(bpf_prog, interface, 0) < 0) {
         LOG_ERROR("Failed to attach XDP on %s", interface);

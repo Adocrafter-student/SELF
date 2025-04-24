@@ -53,7 +53,7 @@ struct traffic_stats {
 
 // eBPF Hash Map for storing IP traffic data
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1000000);
     __type(key, struct ip_key);
     __type(value, struct traffic_stats);
@@ -69,7 +69,7 @@ struct {
 
 // Tracks half-open SYNs: key = 4-tuple, value = __u64 timestamp
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1000000);
     __type(key, struct flow_key);
     __type(value, __u64);
@@ -77,11 +77,19 @@ struct {
 
 // Tracks fully established flows: key = 4-tuple, value = __u64 flag
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1000000);
     __type(key, struct flow_key);
     __type(value, __u64);
 } established_map SEC(".maps");
+
+// Per-IP suspicion score
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 1000000);
+    __type(key, __u32);     // src IP only
+    __type(value, __u8);    // 0–100 score
+} score_map SEC(".maps");
 
 // 4-tuple key for TCP/UDP flow
 struct flow_key {
@@ -200,6 +208,20 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
             struct flow_key fk = { ip->saddr, ip->daddr, tcp->source, tcp->dest, IPPROTO_TCP };
             __u64 now = bpf_ktime_get_ns();
             bpf_map_update_elem(&syn_map, &fk, &now, BPF_ANY);
+
+            // Increment score for half-open connections
+            __u8 zero = 0, *scr;
+            __u32 sip = ip->saddr;
+            scr = bpf_map_lookup_elem(&score_map, &sip);
+            if (!scr) {
+                bpf_map_update_elem(&score_map, &sip, &zero, BPF_ANY);
+                scr = &zero;
+            }
+            // +5 for half-open
+            if (*scr <= 95) {
+                __u8 new = *scr + 5;
+                bpf_map_update_elem(&score_map, &sip, &new, BPF_ANY);
+            }
         }
 
         // Detect handshake completion
@@ -210,6 +232,13 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
                 __u64 one = 1;
                 bpf_map_delete_elem(&syn_map, &fk);
                 bpf_map_update_elem(&established_map, &fk, &one, BPF_ANY);
+
+                // Decrement score for successful handshake
+                __u8 *scr = bpf_map_lookup_elem(&score_map, &ip->saddr);
+                if (scr && *scr >= 10) {
+                    __u8 new = *scr - 10;
+                    bpf_map_update_elem(&score_map, &ip->saddr, &new, BPF_ANY);
+                }
 
                 log_event(ctx, LOG_LEVEL_INFO, fk.src_ip, 0, EV_HANDSHAKE_COMPLETE);
             }

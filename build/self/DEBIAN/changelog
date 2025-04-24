@@ -1,0 +1,7 @@
+self (1.0.0-1) unstable; urgency=medium
+
+  * Initial package release
+  * DDoS protection based on eBPF technology
+  * Self-learning and malicious traffic detection
+
+ -- Administrator <adnan.duharkic@stu.ibu.edu.ba>  Wed, 23 April 2025 12:00:00 +0000

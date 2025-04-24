@@ -1,0 +1,56 @@
+#!/bin/sh
+# Removing set -e to prevent script from exiting on errors
+
+case "$1" in
+    configure)
+        # Ensure standard paths are available for commands like systemctl
+        export PATH="/usr/sbin:/usr/bin:/sbin:/bin"
+
+        # Set permissions
+        chmod 755 /usr/lib/self/main
+        chmod 755 /usr/lib/self/self-tool
+        chmod 755 /usr/sbin/self-start
+        chmod 755 /usr/sbin/self-stop
+        
+        # Create soft link for self-tool
+        ln -sf /usr/lib/self/self-tool /usr/sbin/self-tool
+        
+        # Set CAP_BPF capability for self-tool
+        setcap cap_bpf+ep /usr/lib/self/self-tool
+        
+        # Check for bpftool availability (optional, for user info)
+        KERNEL_VERSION=$(uname -r)
+        BPFTOOL_FOUND=0
+        for path in "/usr/sbin/bpftool" "/usr/bin/bpftool" "/sbin/bpftool" \
+                   "/bin/bpftool" "/usr/lib/linux-tools/${KERNEL_VERSION}/bpftool" \
+                   "/usr/lib/linux-tools-${KERNEL_VERSION}/bpftool"; do
+            if [ -x "$path" ]; then
+                BPFTOOL_FOUND=1
+                break
+            fi
+        done
+        if [ $BPFTOOL_FOUND -eq 0 ]; then
+            echo "========================================================================"
+            echo "INFO: bpftool not found. Consider installing linux-tools for your kernel."
+            echo "      e.g., sudo apt-get install -y linux-tools-${KERNEL_VERSION} linux-tools-common"
+            echo "========================================================================"
+        fi
+        
+        # Enable and start service using deb-systemd helpers
+        if [ -d /run/systemd/system ]; then
+            /bin/systemctl enable self.service --quiet  || true
+            /bin/systemctl start  self.service --quiet  || true
+        fi
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+
+    *)
+        echo "postinst does not recognize argument '$1'" >&2
+        exit 1
+    ;;
+esac
+
+# Always exit with success to avoid breaking package installation
+exit 0 

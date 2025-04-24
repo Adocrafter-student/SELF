@@ -1,26 +1,27 @@
 # Makefile
 
-BPF_CFLAGS   = -g -O2 -target bpf -c
-USER_CFLAGS  = -Wall -O2 -I/usr/include -I/usr/local/include -I/usr/include/bpf
-USER_LDFLAGS = -lelf -lbpf -lpthread -lz -lrt
+# Directories
+SRC_DIR     := src
+BUILD_DIR   := build
+PKG_DIR     := pkg
+LIBBPF_DIR  := third_party/libbpf
 
-BPF_PROG  = ddos_protect.o
-USER_PROG = main
-SELF_TOOL = self-tool
+# Files
+BPF_PROG    := ddos_protect.o
+USER_PROG   := main
+SELF_TOOL   := self-tool
 
-SRC_DIR   = src
-PKG_DIR   = pkg
-BUILD_DIR = build
-
-# Ensure build directory exists
+# Create build directory if not exists
 $(shell mkdir -p $(BUILD_DIR))
 
 # Source files
-SRCS = src/main.c src/logger.c
-OBJS = $(SRCS:.c=.o)
+SRCS := $(SRC_DIR)/main.c $(SRC_DIR)/logger.c
+OBJS := $(SRCS:.c=.o)
 
 # Compilation flags
-CFLAGS += -I./src
+BPF_CFLAGS   := -g -O2 -target bpf -c
+USER_CFLAGS  := -Wall -O2 -I$(SRC_DIR) -I$(LIBBPF_DIR)/src
+USER_LDFLAGS := $(LIBBPF_DIR)/src/libbpf.a -lelf -lz -lpthread -lrt
 
 # Default target
 all: $(BUILD_DIR)/$(BPF_PROG) $(BUILD_DIR)/$(USER_PROG) $(BUILD_DIR)/$(SELF_TOOL)
@@ -29,11 +30,15 @@ all: $(BUILD_DIR)/$(BPF_PROG) $(BUILD_DIR)/$(USER_PROG) $(BUILD_DIR)/$(SELF_TOOL
 $(BUILD_DIR)/$(BPF_PROG): $(SRC_DIR)/ddos_protect.c
 	clang $(BPF_CFLAGS) $< -o $@
 
-# Compile user-space program
-$(BUILD_DIR)/$(USER_PROG): $(SRC_DIR)/main.c $(SRC_DIR)/logger.c
-	gcc $(USER_CFLAGS) $(SRC_DIR)/main.c $(SRC_DIR)/logger.c -o $@ $(USER_LDFLAGS)
+# Compile user-space loader (main binary)
+$(BUILD_DIR)/$(USER_PROG): $(SRCS)
+	$(CC) $(USER_CFLAGS) $^ -o $@ $(USER_LDFLAGS)
 
-# Just compile everything (like all) – useful for preparation
+# Compile self-tool
+$(BUILD_DIR)/$(SELF_TOOL): $(SRC_DIR)/self_tool/self_tool.c
+	$(CC) $(USER_CFLAGS) -o $@ $< $(USER_LDFLAGS)
+
+# Just compile everything (like all)
 self: all
 	@echo "SELF build complete – binaries compiled."
 
@@ -42,22 +47,18 @@ pkg: all
 	@echo "Building Debian package..."
 	$(PKG_DIR)/pkg_make.sh
 
-# Build everything including package
+# Full build product
 product: all pkg
 	@echo "SELF product build complete – binaries compiled and packaged."
 
-# Simple clean
+# Clean just binaries
 clean:
 	@echo "Cleaning build artifacts..."
-	rm -f $(BUILD_DIR)/$(BPF_PROG) $(BUILD_DIR)/$(USER_PROG)
+	rm -f $(BUILD_DIR)/$(BPF_PROG) $(BUILD_DIR)/$(USER_PROG) $(BUILD_DIR)/$(SELF_TOOL)
 
-# Remove the entire build directory
+# Full cleanup
 clobber:
 	@echo "Removing entire build directory..."
 	rm -rf $(BUILD_DIR)
-
-# New target for self-tool
-$(BUILD_DIR)/$(SELF_TOOL): src/self_tool/self_tool.c
-	$(CC) $(USER_CFLAGS) -o $@ $< $(USER_LDFLAGS)
 
 .PHONY: all clean clobber self pkg product

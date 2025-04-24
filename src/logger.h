@@ -23,6 +23,9 @@ void logger_close(void);
 // Main logging function
 void logger_log(log_level_t level, const char *format, ...);
 
+// Set verbose mode
+void logger_set_verbose(int on);
+
 // Convenience macros
 #define LOG_DEBUG(...) logger_log(LOG_DEBUG, __VA_ARGS__)
 #define LOG_INFO(...) logger_log(LOG_INFO, __VA_ARGS__)

@@ -6,6 +6,31 @@
 #include <linux/in.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
+#include "ddos_events.h"
+
+// Log levels
+#define LOG_LEVEL_DEBUG   0
+#define LOG_LEVEL_INFO    1
+#define LOG_LEVEL_WARNING 2
+#define LOG_LEVEL_ERROR   3
+
+// Log entry structure
+struct log_entry {
+    __u32 level;
+    __u32 ip;
+    __u64 packets;
+    __u8 code;      // Event code from ddos_event_code enum
+    __u64 timestamp;
+};
+
+// Log buffer map
+struct {
+    __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
+    __uint(key_size, sizeof(__u32));
+    __uint(value_size, sizeof(__u32));
+    __uint(pinning, LIBBPF_PIN_BY_NAME);  // Pin the map
+    __uint(max_entries, 1024);
+} log_buffer SEC(".maps");
 
 // Key for our IP map
 struct ip_key {
@@ -33,8 +58,26 @@ struct {
     __type(value, struct traffic_stats);
 } ip_traffic_map SEC(".maps");
 
+// Helper function to log events
+static __always_inline void log_event(struct xdp_md *ctx,
+                                     __u32 level,
+                                     __u32 ip,
+                                     __u64 packets,
+                                     __u8 code)
+{
+    struct log_entry entry = {
+        .level = level,
+        .ip = ip,
+        .packets = packets,
+        .code = code,
+        .timestamp = bpf_ktime_get_ns()
+    };
+    
+    bpf_perf_event_output(ctx, &log_buffer, BPF_F_CURRENT_CPU, &entry, sizeof(entry));
+}
+
 // Helper function to process the packet
-static __always_inline int process_packet(void *data, void *data_end)
+static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *data_end)
 {
     // Parse Ethernet
     struct ethhdr *eth = data;
@@ -95,6 +138,7 @@ static __always_inline int process_packet(void *data, void *data_end)
         if (now - stats->last_seen > RATE_WINDOW) {
             stats->packet_count = 0;
             stats->blocked = 0;
+            log_event(ctx, LOG_LEVEL_INFO, key.ip, stats->packet_count, EV_RESET);
         }
 
         stats->packet_count += 1;
@@ -105,6 +149,7 @@ static __always_inline int process_packet(void *data, void *data_end)
         if (stats->packet_count > PACKET_THRESHOLD) {
             stats->blocked += 1;
             bpf_map_update_elem(&ip_traffic_map, &key, stats, BPF_ANY);
+            log_event(ctx, LOG_LEVEL_WARNING, key.ip, stats->packet_count, EV_BLOCK);
             return XDP_DROP;
         }
 
@@ -118,6 +163,7 @@ static __always_inline int process_packet(void *data, void *data_end)
             .blocked      = 0,
         };
         bpf_map_update_elem(&ip_traffic_map, &key, &new_stats, BPF_ANY);
+        log_event(ctx, LOG_LEVEL_DEBUG, key.ip, 1, EV_NEW_IP);
     }
 
     return XDP_PASS;
@@ -132,7 +178,7 @@ int xdp_ddos_protect(struct xdp_md *ctx)
     void *data_end = (void *)(long)ctx->data_end;
 
     // Just call our helper
-    return process_packet(data, data_end);
+    return process_packet(ctx, data, data_end);
 }
 
 // Required license

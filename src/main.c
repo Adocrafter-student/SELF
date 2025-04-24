@@ -13,6 +13,19 @@
 #include <signal.h>
 #include <string.h>
 #include "logger.h"
+#include <linux/bpf.h>
+#include <linux/perf_event.h>
+#include <sys/mman.h>
+#include <sys/syscall.h>
+#include "ddos_events.h"
+#include <sys/stat.h>
+#include <fcntl.h>
+
+// Log levels
+#define LOG_LEVEL_DEBUG   0
+#define LOG_LEVEL_INFO    1
+#define LOG_LEVEL_WARNING 2
+#define LOG_LEVEL_ERROR   3
 
 #define BPF_OBJ_PATH "/usr/lib/self/ddos_protect.o"
 #define DEFAULT_INTERFACE "eth0"
@@ -31,30 +44,55 @@ struct traffic_stats {
     __u64 blocked;
 };
 
+// Log entry structure
+struct log_entry {
+    __u32 level;
+    __u32 ip;
+    __u64 packets;
+    char msg[64];
+    __u64 timestamp;
+    __u32 code;
+};
+
 // Globals
 int map_fd   = -1;
 int prog_fd  = -1;
 volatile int running = 1;
 int verbose = 0;
 char interface[IF_NAMESIZE] = DEFAULT_INTERFACE;
+static int log_buffer_fd = -1;
+static void *log_buffer_mmap = NULL;
 
-/* Attach/detach helpers using the older bpf_set_link_xdp_fd() approach */
-static int attach_xdp(int ifindex, int fd, __u32 flags)
+// Global link handle
+static struct bpf_link *prog_link = NULL;
+
+// Global variables for log handling
+static pthread_t log_thread;
+
+// New attach/detach helpers using the link API
+static int attach_xdp(struct bpf_program *bpf_prog, const char *ifname, __u32 flags)
 {
-    int err = bpf_set_link_xdp_fd(ifindex, fd, flags);
-    if (err < 0) {
-        LOG_ERROR("attach_xdp: err(%d): %s", err, strerror(-err));
+    int ifindex = if_nametoindex(ifname);
+    if (ifindex <= 0) {
+        LOG_ERROR("if_nametoindex(%s) failed", ifname);
+        return -1;
     }
-    return err;
+    prog_link = bpf_program__attach_xdp(bpf_prog, ifindex);
+    if (libbpf_get_error(prog_link)) {
+        LOG_ERROR("bpf_program__attach_xdp failed: %ld", libbpf_get_error(prog_link));
+        bpf_link__destroy(prog_link);
+        prog_link = NULL;
+        return -1;
+    }
+    return 0;
 }
 
-static int detach_xdp(int ifindex, __u32 flags)
+static void detach_xdp(void)
 {
-    int err = bpf_set_link_xdp_fd(ifindex, -1, flags);
-    if (err < 0) {
-        LOG_ERROR("detach_xdp: err(%d): %s", err, strerror(-err));
+    if (prog_link) {
+        bpf_link__destroy(prog_link);
+        prog_link = NULL;
     }
-    return err;
 }
 
 static void signal_handler(int sig)
@@ -72,12 +110,90 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va
     return 0;
 }
 
+// Function to handle log events
+static void handle_log_event(void *ctx, int cpu, void *data, __u32 size)
+{
+    struct log_entry *entry = data;
+    char ip_str[INET_ADDRSTRLEN];
+    struct in_addr addr = {.s_addr = entry->ip};
+    inet_ntop(AF_INET, &addr, ip_str, sizeof(ip_str));
+
+    const char *event_str = "Unknown event";
+    if (entry->code < sizeof(ddos_event_strings)/sizeof(ddos_event_strings[0])) {
+        event_str = ddos_event_strings[entry->code];
+    }
+
+    switch (entry->level) {
+        case LOG_LEVEL_DEBUG:
+            LOG_DEBUG("%s (IP: %s, packets: %llu)", event_str, ip_str, entry->packets);
+            break;
+        case LOG_LEVEL_INFO:
+            LOG_INFO("%s (IP: %s, packets: %llu)", event_str, ip_str, entry->packets);
+            break;
+        case LOG_LEVEL_WARNING:
+            LOG_WARNING("%s (IP: %s, packets: %llu)", event_str, ip_str, entry->packets);
+            break;
+        case LOG_LEVEL_ERROR:
+            LOG_ERROR("%s (IP: %s, packets: %llu)", event_str, ip_str, entry->packets);
+            break;
+    }
+}
+
+// Log reader thread function
+static void *log_reader_thread(void *arg)
+{
+    struct perf_buffer *pb = NULL;
+    
+    // Create perf buffer with proper callback functions
+    pb = perf_buffer__new(log_buffer_fd, 8, handle_log_event, NULL, NULL, NULL);
+    if (libbpf_get_error(pb)) {
+        LOG_ERROR("Failed to create perf buffer");
+        return NULL;
+    }
+
+    // Process events
+    while (running) {
+        int err = perf_buffer__poll(pb, 100);
+        if (err < 0 && err != -EINTR) {
+            LOG_ERROR("Error polling perf buffer: %d", err);
+            break;
+        }
+    }
+
+    perf_buffer__free(pb);
+    return NULL;
+}
+
+// Function to cleanup pinned maps
+static void cleanup_pinned_maps(void)
+{
+    const char *map_paths[] = {
+        "/sys/fs/bpf/log_buffer",
+        "/sys/fs/bpf/ip_traffic_map",
+        NULL
+    };
+
+    for (int i = 0; map_paths[i] != NULL; i++) {
+        if (access(map_paths[i], F_OK) == 0) {
+            if (unlink(map_paths[i]) != 0) {
+                LOG_WARNING("Failed to unlink pinned map %s: %s", 
+                           map_paths[i], strerror(errno));
+            } else {
+                LOG_INFO("Removed pinned map %s", map_paths[i]);
+            }
+        }
+    }
+}
+
 // Function to load and attach the BPF program
 static int load_bpf_program(int test_only)
 {
     struct bpf_object *obj = NULL;
     struct bpf_program *bpf_prog;
-    int ifindex, err;
+    int err;
+
+    // Cleanup existing pinned maps
+    cleanup_pinned_maps();
 
     // Set up libbpf debug logging
     libbpf_set_print(libbpf_print_fn);
@@ -96,10 +212,9 @@ static int load_bpf_program(int test_only)
     err = bpf_object__load(obj);
     if (err) {
         LOG_ERROR("Failed to load BPF object: %s", strerror(-err));
-                if (err == -EPERM) {
+        if (err == -EPERM) {
             LOG_ERROR("Permission denied. Are you running as root?");
         }
-        
         bpf_object__close(obj);
         return -1;
     }
@@ -146,6 +261,58 @@ static int load_bpf_program(int test_only)
         LOG_INFO("Map already exists at /sys/fs/bpf/ip_traffic_map");
     }
 
+    // Get log buffer map
+    struct bpf_map *log_map = bpf_object__find_map_by_name(obj, "log_buffer");
+    if (!log_map) {
+        LOG_ERROR("Failed to find log buffer map");
+        goto cleanup;
+    }
+
+    log_buffer_fd = bpf_map__fd(log_map);
+    if (log_buffer_fd < 0) {
+        LOG_ERROR("Failed to get log buffer fd");
+        goto cleanup;
+    }
+
+    // Set up perf buffer
+    struct perf_event_attr attr = {
+        .type = PERF_TYPE_SOFTWARE,
+        .size = sizeof(struct perf_event_attr),
+        .config = PERF_COUNT_SW_BPF_OUTPUT,
+        .sample_type = PERF_SAMPLE_RAW,
+        .wakeup_events = 1,
+    };
+
+    int perf_fd = syscall(SYS_perf_event_open, &attr, -1, 0, -1, 0);
+    if (perf_fd < 0) {
+        LOG_ERROR("Failed to create perf event: %s", strerror(errno));
+        bpf_object__close(obj);
+        return -1;
+    }
+
+    if (bpf_map_update_elem(log_buffer_fd, &(int){0}, &perf_fd, BPF_ANY)) {
+        LOG_ERROR("Failed to update perf event map: %s", strerror(errno));
+        close(perf_fd);
+        bpf_object__close(obj);
+        return -1;
+    }
+
+    // Map the perf buffer
+    log_buffer_mmap = mmap(NULL, getpagesize() * 2, PROT_READ | PROT_WRITE, 
+                          MAP_SHARED, perf_fd, 0);
+    if (log_buffer_mmap == MAP_FAILED) {
+        LOG_ERROR("Failed to mmap perf buffer: %s", strerror(errno));
+        close(perf_fd);
+        bpf_object__close(obj);
+        return -1;
+    }
+
+    // Create log reader thread
+    if (pthread_create(&log_thread, NULL, log_reader_thread, NULL)) {
+        LOG_ERROR("Failed to create log reader thread");
+        goto cleanup;
+    }
+
     if (test_only) {
         LOG_INFO("Test mode: BPF program loaded successfully. Not attaching to interface.");
         bpf_object__close(obj);
@@ -154,22 +321,17 @@ static int load_bpf_program(int test_only)
 
     //Attach the XDP program to the specified interface
     LOG_INFO("Attaching to interface: %s", interface);
-    ifindex = if_nametoindex(interface);
-    if (!ifindex) {
-        LOG_ERROR("Failed to get ifindex for interface %s", interface);
-        LOG_ERROR("Available interfaces:");
-        system("ip link show | grep -E '^[0-9]+:' | cut -d' ' -f2 | tr -d ':'");
-        bpf_object__close(obj);
-        return -1;
-    }
-    err = attach_xdp(ifindex, prog_fd, 0 /* flags, e.g. XDP_FLAGS_SKB_MODE */);
-    if (err < 0) {
+    if (attach_xdp(bpf_prog, interface, 0) < 0) {
         LOG_ERROR("Failed to attach XDP on %s", interface);
         bpf_object__close(obj);
         return -1;
     }
 
     return 0;
+
+cleanup:
+    bpf_object__close(obj);
+    return -1;
 }
 
 // Thread to monitor our BPF map
@@ -223,6 +385,10 @@ void print_usage(char *prog_name) {
     LOG_INFO("  --help             Display this help message");
 }
 
+// Forward declaration of cleanup function
+static void cleanup(void);
+
+// Update main function to use cleanup
 int main(int argc, char **argv)
 {
     int test_mode = 0;
@@ -287,6 +453,14 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
+    // Start log reader thread
+    pthread_t log_thread;
+    if (pthread_create(&log_thread, NULL, log_reader_thread, NULL) != 0) {
+        LOG_ERROR("Failed to create log reader thread: %s", strerror(errno));
+        logger_close();
+        return EXIT_FAILURE;
+    }
+
     LOG_INFO("[Main] eBPF program running on interface %s. Monitoring started.", interface);
     if (verbose) {
         LOG_INFO("Running in verbose mode");
@@ -295,14 +469,40 @@ int main(int argc, char **argv)
 
     // Wait until user stops
     pthread_join(monitor_thread, NULL);
+    pthread_join(log_thread, NULL);
 
     // Detach XDP before exit
-    int ifindex = if_nametoindex(interface);
-    if (ifindex) {
-        detach_xdp(ifindex, 0);
-    }
+    detach_xdp();
 
     LOG_INFO("[Main] Exiting.");
     logger_close();
+
+    // Register cleanup handler
+    atexit(cleanup);
     return 0;
+}
+
+// Cleanup function definition
+static void cleanup(void)
+{
+    running = 0;
+    
+    // Wait for log thread to finish
+    if (log_thread) {
+        pthread_join(log_thread, NULL);
+    }
+
+    detach_xdp();
+    if (log_buffer_mmap) {
+        munmap(log_buffer_mmap, getpagesize() * 2);
+        log_buffer_mmap = NULL;
+    }
+    if (map_fd >= 0) {
+        close(map_fd);
+        map_fd = -1;
+    }
+    if (prog_fd >= 0) {
+        close(prog_fd);
+        prog_fd = -1;
+    }
 }

@@ -4,21 +4,21 @@ set -e
 # Default interface
 INTERFACE="eth0"
 
-# Check if running as root
+
 if [ "$(id -u)" -ne 0 ]; then
     echo "This script must be run as root"
     exit 1
 fi
 
-# Check if interface exists
+
 if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
     echo "Interface $INTERFACE does not exist"
     exit 1
 fi
 
-# Start the main program
+
 echo "Starting SELF on interface $INTERFACE..."
 exec /usr/lib/self/main --interface="$INTERFACE"
 
-# This line will never be reached if exec succeeds
+
 echo "SELF started successfully" 

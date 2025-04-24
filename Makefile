@@ -15,6 +15,13 @@ BUILD_DIR = build
 # Ensure build directory exists
 $(shell mkdir -p $(BUILD_DIR))
 
+# Source files
+SRCS = src/main.c src/logger.c
+OBJS = $(SRCS:.c=.o)
+
+# Compilation flags
+CFLAGS += -I./src
+
 # Default target
 all: $(BUILD_DIR)/$(BPF_PROG) $(BUILD_DIR)/$(USER_PROG) $(BUILD_DIR)/$(SELF_TOOL)
 
@@ -23,8 +30,8 @@ $(BUILD_DIR)/$(BPF_PROG): $(SRC_DIR)/ddos_protect.c
 	clang $(BPF_CFLAGS) $< -o $@
 
 # Compile user-space program
-$(BUILD_DIR)/$(USER_PROG): $(SRC_DIR)/main.c
-	gcc $(USER_CFLAGS) $< -o $@ $(USER_LDFLAGS)
+$(BUILD_DIR)/$(USER_PROG): $(SRC_DIR)/main.c $(SRC_DIR)/logger.c
+	gcc $(USER_CFLAGS) $(SRC_DIR)/main.c $(SRC_DIR)/logger.c -o $@ $(USER_LDFLAGS)
 
 # Just compile everything (like all) – useful for preparation
 self: all

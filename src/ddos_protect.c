@@ -53,7 +53,7 @@ struct traffic_stats {
 
 // eBPF Hash Map for storing IP traffic data
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1000000);
     __type(key, struct ip_key);
     __type(value, struct traffic_stats);
@@ -69,7 +69,7 @@ struct {
 
 // Tracks half-open SYNs: key = 4-tuple, value = __u64 timestamp
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1000000);
     __type(key, struct flow_key);
     __type(value, __u64);
@@ -77,11 +77,19 @@ struct {
 
 // Tracks fully established flows: key = 4-tuple, value = __u64 flag
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1000000);
     __type(key, struct flow_key);
     __type(value, __u64);
 } established_map SEC(".maps");
+
+// Per-IP suspicion score
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 1000000);
+    __type(key, __u32);     // src IP only
+    __type(value, __u8);    // 0–100 score
+} score_map SEC(".maps");
 
 // 4-tuple key for TCP/UDP flow
 struct flow_key {

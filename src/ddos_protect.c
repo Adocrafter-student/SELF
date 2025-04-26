@@ -51,6 +51,7 @@ struct traffic_stats {
 // Constants for simple rate-limiting
 #define PACKET_THRESHOLD 1000             // Packets before we start blocking
 #define RATE_WINDOW      60000000000ULL   // 60 seconds in nanoseconds
+#define WINDOW_NS        5000000000ULL    // 5 seconds in nanoseconds
 
 // eBPF Hash Map for storing IP traffic data
 struct {
@@ -70,13 +71,19 @@ struct {
     __type(value, __u64); // Block until timestamp (0 = permanent)
 } blocked_ips_map SEC(".maps");
 
-// Tracks half-open SYNs: key = 4-tuple, value = __u64 timestamp
+// Structure for SYN tracking value
+struct syn_val {
+    __u64 ts_ns;   // last SYN timestamp
+};
+
+// Tracks half-open SYN counts per source IP
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1000000);
-    __type(key, struct flow_key);
-    __type(value, __u64);
-} syn_map SEC(".maps");
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
+    __type(key,   __u32);  // src IP only
+    __type(value, struct syn_val);
+} ip_syn_count_map SEC(".maps");
 
 // Tracks fully established flows: key = 4-tuple, value = __u64 flag
 struct {
@@ -211,6 +218,9 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
     // Figure out if it's TCP or UDP so we can store the source port
     void *l4hdr = (void *)ip + sizeof(*ip);
 
+    // Current time in nanoseconds - get once
+    __u64 now = bpf_ktime_get_ns();
+
     // Basic boundary check: we need at least the size of a TCP or UDP header
     if (l4hdr + sizeof(struct tcphdr) > data_end) {
         // Not enough room even for a TCP/UDP header, just pass
@@ -226,53 +236,68 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
 
         // Track SYN packets
         if (tcp->syn && !tcp->ack) {
-            struct flow_key fk = { ip->saddr, ip->daddr, tcp->source, tcp->dest, IPPROTO_TCP };
-            __u64 now = bpf_ktime_get_ns();
-            __u64 *prev_ts = bpf_map_lookup_elem(&syn_map, &fk);
-            
-            if (!prev_ts) {
-                // first SYN for this 4-tuple: record timestamp
-                bpf_map_update_elem(&syn_map, &fk, &now, BPF_ANY);
-            } else {
-                // second SYN (handshake never completed): treat as a failed handshake
-                bpf_map_delete_elem(&syn_map, &fk);
+            __u32 sip = ip->saddr;
+            struct syn_val *val = bpf_map_lookup_elem(&ip_syn_count_map, &sip);
+            struct syn_val new_val = { .ts_ns = now };
 
-                // now we bump score once and maybe ban
-                __u32 sip = fk.src_ip;
+            if (!val || (now - val->ts_ns > WINDOW_NS)) {
+                // First SYN from this IP in this window, or map entry expired
+                bpf_map_update_elem(&ip_syn_count_map, &sip, &new_val, BPF_ANY);
+                 log_event(ctx, LOG_LEVEL_DEBUG, sip, 0, EV_FIRST_SYN); // Optional: Log first SYN
+            } else {
+                // Second (or later) SYN within the window -> penalty
                 __u8 *scr = bpf_map_lookup_elem(&score_map, &sip);
-                __u8 zero = 0;
+                __u8 init = 0;
                 if (!scr) {
-                    bpf_map_update_elem(&score_map, &sip, &zero, BPF_ANY);
-                    scr = &zero;
+                    // Initialize score if not present
+                    bpf_map_update_elem(&score_map, &sip, &init, BPF_ANY);
+                    scr = &init;
                 }
-                __u8 new = (*scr + SCORE_HALF_OPEN_INC <= SCORE_MAX)
-                           ? *scr + SCORE_HALF_OPEN_INC
-                           : SCORE_MAX;
-                bpf_map_update_elem(&score_map, &sip, &new, BPF_ANY);
-                maybe_ban_ip(sip, now, new);
+                __u8 score = (*scr + SCORE_HALF_OPEN_INC <= SCORE_MAX)
+                               ? *scr + SCORE_HALF_OPEN_INC
+                               : SCORE_MAX;
+                bpf_map_update_elem(&score_map, &sip, &score, BPF_ANY);
+                maybe_ban_ip(sip, now, score);
+
+                log_event(ctx, LOG_LEVEL_WARNING, sip, score, EV_SYN_RETRY_PENALTY); // Log the penalty
+
+                // Reset the SYN counter after penalty
+                new_val.ts_ns = now; // Update timestamp to restart window
+                bpf_map_update_elem(&ip_syn_count_map, &sip, &new_val, BPF_ANY);
             }
         }
 
-        // Detect handshake completion
+        // Detect handshake completion / ACK received
         if (tcp->ack && !tcp->syn) {
             struct flow_key fk = { ip->saddr, ip->daddr, tcp->source, tcp->dest, IPPROTO_TCP };
-            __u64 *syn_ts = bpf_map_lookup_elem(&syn_map, &fk);
-            if (syn_ts) {
+            // __u64 *syn_ts = bpf_map_lookup_elem(&syn_map, &fk); // Old check
+            // if (syn_ts) { // Old check
+
+            // Check if not already established
+            __u32 sip = ip->saddr;
+            struct syn_val *sv = bpf_map_lookup_elem(&ip_syn_count_map, &sip);
+            __u64 *est = bpf_map_lookup_elem(&established_map, &fk);
+            if (!est && sv) {
                 __u64 one = 1;
-                bpf_map_delete_elem(&syn_map, &fk);
+                // bpf_map_delete_elem(&syn_map, &fk); // Old delete
                 bpf_map_update_elem(&established_map, &fk, &one, BPF_ANY);
 
-                // Decrement score for successful handshake
+                // Delete the SYN tracking entry now that handshake is complete
+                bpf_map_delete_elem(&ip_syn_count_map, &sip);
+
+                // Decrement score for successful handshake completion (if score exists)
                 __u8 *scr = bpf_map_lookup_elem(&score_map, &ip->saddr);
                 if (scr) {
                     __u8 old = *scr;
                     __u8 dec = SCORE_HANDSHAKE_DEC;
                     __u8 new = old > dec ? old - dec : 0;
-                    bpf_map_update_elem(&score_map, &ip->saddr, &new, BPF_ANY);
+                    if (new != old) { // Update only if changed
+                        bpf_map_update_elem(&score_map, &ip->saddr, &new, BPF_ANY);
+                    }
                 }
-
                 log_event(ctx, LOG_LEVEL_INFO, fk.src_ip, 0, EV_HANDSHAKE_COMPLETE);
             }
+            // } // End old check
         }
 
     } else if (ip->protocol == IPPROTO_UDP) {
@@ -284,9 +309,6 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
     } else {
         key.port = 0;  // For non-TCP/UDP, just store 0 as port
     }
-
-    // Current time in nanoseconds
-    __u64 now = bpf_ktime_get_ns();
 
     // Packet length
     __u64 pkt_size = (void *)data_end - (void *)data;

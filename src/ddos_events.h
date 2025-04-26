@@ -13,7 +13,9 @@ enum ddos_event_code {
     EV_MANUAL_BLOCK = 7,  // IP manually blocked
     EV_HANDSHAKE_COMPLETE = 8, // TCP handshake completed
     EV_ESTABLISHED = 9, // TCP established connection
-    EV_MAX = 10            // Maximum event code
+    EV_FIRST_SYN = 10,      // First SYN from IP in window
+    EV_SYN_RETRY_PENALTY = 11, // Score increase due to SYN retry
+    EV_MAX = 12            // Maximum event code
 };
 
 // String mappings for event codes
@@ -28,6 +30,8 @@ static const char *ddos_event_strings[] = {
     [EV_MANUAL_BLOCK] = "[kern] IP manually blocked",
     [EV_HANDSHAKE_COMPLETE] = "[kern] TCP handshake completed",
     [EV_ESTABLISHED] = "[kern] TCP established connection",
+    [EV_FIRST_SYN] = "[kern] First SYN received",
+    [EV_SYN_RETRY_PENALTY] = "[kern] SYN retry penalty applied",
     [EV_MAX] = "Unknown event"
 };
 

@@ -30,7 +30,7 @@
 #define BPF_OBJ_PATH "/usr/lib/self/ddos_protect.o"
 #define DEFAULT_INTERFACE "eth0"
 #define BLOCKED_IPS_MAP_PATH "/sys/fs/bpf/blocked_ips_map"
-#define SYN_MAP_PATH "/sys/fs/bpf/syn_map"
+#define IP_SYN_COUNT_MAP_PATH "/sys/fs/bpf/ip_syn_count_map"
 #define ESTABLISHED_MAP_PATH "/sys/fs/bpf/established_map"
 #define SCORE_MAP_PATH "/sys/fs/bpf/score_map"
 
@@ -124,6 +124,8 @@ static void handle_log_event(void *ctx, int cpu, void *data, __u32 size)
     const char *event_str = "Unknown event";
     if (entry->code < sizeof(ddos_event_strings)/sizeof(ddos_event_strings[0])) {
         event_str = ddos_event_strings[entry->code];
+    } else {
+        LOG_WARNING("Received unknown event code: %u", entry->code);
     }
 
     switch (entry->level) {
@@ -174,7 +176,7 @@ static void cleanup_pinned_maps(void)
         "/sys/fs/bpf/log_buffer",
         "/sys/fs/bpf/ip_traffic_map",
         BLOCKED_IPS_MAP_PATH,
-        SYN_MAP_PATH,
+        IP_SYN_COUNT_MAP_PATH,
         ESTABLISHED_MAP_PATH,
         SCORE_MAP_PATH,
         NULL
@@ -275,7 +277,7 @@ static int load_bpf_program(int test_only)
     if (pin_bpf_map(obj, "ip_traffic_map", "/sys/fs/bpf/ip_traffic_map") < 0) goto cleanup;
     if (pin_bpf_map(obj, "log_buffer", "/sys/fs/bpf/log_buffer") < 0) goto cleanup;
     if (pin_bpf_map(obj, "blocked_ips_map", BLOCKED_IPS_MAP_PATH) < 0) goto cleanup;
-    if (pin_bpf_map(obj, "syn_map", SYN_MAP_PATH) < 0) goto cleanup;
+    if (pin_bpf_map(obj, "ip_syn_count_map", IP_SYN_COUNT_MAP_PATH) < 0) goto cleanup;
     if (pin_bpf_map(obj, "established_map", ESTABLISHED_MAP_PATH) < 0) goto cleanup;
     if (pin_bpf_map(obj, "score_map", SCORE_MAP_PATH) < 0) goto cleanup;
 

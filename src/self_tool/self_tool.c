@@ -7,6 +7,7 @@
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 #include "self_tool.h"
+#include "self_defs.h"
 
 #define MAP_PATH "/sys/fs/bpf/ip_traffic_map"
 #define BLOCKED_IPS_MAP_PATH "/sys/fs/bpf/blocked_ips_map"
@@ -252,7 +253,7 @@ static int list_scores(int map_fd) {
             inet_ntop(AF_INET, &addr, ip_str, sizeof(ip_str));
             
             printf("IP: %s\n", ip_str);
-            printf("  Score: %u/100\n", score);
+            printf("  Score: %u/%u\n", score, SCORE_MAX);
             printf("----------------------------------------\n");
             count++;
         }

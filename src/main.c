@@ -229,8 +229,8 @@ static int load_bpf_program(int test_only)
     struct bpf_program *bpf_prog;
     int err;
 
-    // Cleanup existing pinned maps
-    cleanup_pinned_maps();
+    // Cleanup existing pinned maps - REMOVED TO ALLOW PERSISTENCE
+    // cleanup_pinned_maps();
 
     // Set up libbpf debug logging
     libbpf_set_print(libbpf_print_fn);

@@ -38,6 +38,10 @@ cleanup_files() {
     if [ -f "/sys/fs/bpf/established_map" ]; then
         rm -f /sys/fs/bpf/established_map
     fi
+    # Remove the score_map
+    if [ -f "/sys/fs/bpf/score_map" ]; then
+        rm -f /sys/fs/bpf/score_map
+    fi
 
     echo "File cleanup completed."
 }

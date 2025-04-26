@@ -7,6 +7,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 #include "ddos_events.h"
+#include "self_defs.h"
 
 // Log levels
 #define LOG_LEVEL_DEBUG   0
@@ -55,6 +56,7 @@ struct traffic_stats {
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1000000);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
     __type(key, struct ip_key);
     __type(value, struct traffic_stats);
 } ip_traffic_map SEC(".maps");
@@ -63,6 +65,7 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1000000);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
     __type(key, __u32);  // IP address
     __type(value, __u64); // Block until timestamp (0 = permanent)
 } blocked_ips_map SEC(".maps");
@@ -87,6 +90,7 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1000000);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
     __type(key, __u32);     // src IP only
     __type(value, __u8);    // 0–100 score
 } score_map SEC(".maps");
@@ -116,6 +120,23 @@ static __always_inline void log_event(struct xdp_md *ctx,
     };
     
     bpf_perf_event_output(ctx, &log_buffer, BPF_F_CURRENT_CPU, &entry, sizeof(entry));
+}
+
+// Helper function to potentially ban an IP based on its score
+static __always_inline void maybe_ban_ip(__u32 sip, __u64 now, __u8 score)
+{
+    __u64 expire = 0;
+
+    if (score >= SCORE_PERMANENT_BAN)     expire = BAN_PERMANENT;
+    else if (score >= SCORE_15_DAYS_BAN)  expire = now + BAN_15_DAYS;
+    else if (score >= SCORE_4_DAYS_BAN)   expire = now + BAN_4_DAYS;
+    else if (score >= SCORE_1_DAY_BAN)    expire = now + BAN_1_DAY;
+    else if (score >= SCORE_15_MIN_BAN)   expire = now + BAN_15_MIN;
+    else if (score >= SCORE_1_MIN_BAN)    expire = now + BAN_1_MIN;
+    else if (score >= SCORE_15_SEC_BAN)   expire = now + BAN_15_SEC;
+    else return; // below 10: no ban yet
+
+    bpf_map_update_elem(&blocked_ips_map, &sip, &expire, BPF_ANY);
 }
 
 // Helper function to process the packet
@@ -207,20 +228,28 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
         if (tcp->syn && !tcp->ack) {
             struct flow_key fk = { ip->saddr, ip->daddr, tcp->source, tcp->dest, IPPROTO_TCP };
             __u64 now = bpf_ktime_get_ns();
-            bpf_map_update_elem(&syn_map, &fk, &now, BPF_ANY);
+            __u64 *prev_ts = bpf_map_lookup_elem(&syn_map, &fk);
+            
+            if (!prev_ts) {
+                // first SYN for this 4-tuple: record timestamp
+                bpf_map_update_elem(&syn_map, &fk, &now, BPF_ANY);
+            } else {
+                // second SYN (handshake never completed): treat as a failed handshake
+                bpf_map_delete_elem(&syn_map, &fk);
 
-            // Increment score for half-open connections
-            __u8 zero = 0, *scr;
-            __u32 sip = ip->saddr;
-            scr = bpf_map_lookup_elem(&score_map, &sip);
-            if (!scr) {
-                bpf_map_update_elem(&score_map, &sip, &zero, BPF_ANY);
-                scr = &zero;
-            }
-            // +5 for half-open
-            if (*scr <= 95) {
-                __u8 new = *scr + 5;
+                // now we bump score once and maybe ban
+                __u32 sip = fk.src_ip;
+                __u8 *scr = bpf_map_lookup_elem(&score_map, &sip);
+                __u8 zero = 0;
+                if (!scr) {
+                    bpf_map_update_elem(&score_map, &sip, &zero, BPF_ANY);
+                    scr = &zero;
+                }
+                __u8 new = (*scr + SCORE_HALF_OPEN_INC <= SCORE_MAX)
+                           ? *scr + SCORE_HALF_OPEN_INC
+                           : SCORE_MAX;
                 bpf_map_update_elem(&score_map, &sip, &new, BPF_ANY);
+                maybe_ban_ip(sip, now, new);
             }
         }
 
@@ -235,8 +264,10 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
 
                 // Decrement score for successful handshake
                 __u8 *scr = bpf_map_lookup_elem(&score_map, &ip->saddr);
-                if (scr && *scr >= 10) {
-                    __u8 new = *scr - 10;
+                if (scr) {
+                    __u8 old = *scr;
+                    __u8 dec = SCORE_HANDSHAKE_DEC;
+                    __u8 new = old > dec ? old - dec : 0;
                     bpf_map_update_elem(&score_map, &ip->saddr, &new, BPF_ANY);
                 }
 

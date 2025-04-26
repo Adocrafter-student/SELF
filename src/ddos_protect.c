@@ -146,6 +146,79 @@ static __always_inline void maybe_ban_ip(__u32 sip, __u64 now, __u8 score)
     bpf_map_update_elem(&blocked_ips_map, &sip, &expire, BPF_ANY);
 }
 
+// Helper function to handle TCP SYN packets
+static __always_inline void handle_tcp_syn(struct xdp_md *ctx,
+                                          struct iphdr *ip,
+                                          struct tcphdr *tcp,
+                                          __u64 now)
+{
+    __u32 sip = ip->saddr;
+    struct syn_val new_val = { .ts_ns = now }; // Only need timestamp
+
+    struct syn_val *val = bpf_map_lookup_elem(&ip_syn_count_map, &sip);
+
+    if (!val || (now - val->ts_ns > WINDOW_NS)) {
+        // First SYN from this IP in this window, or map entry expired
+        bpf_map_update_elem(&ip_syn_count_map, &sip, &new_val, BPF_ANY);
+        log_event(ctx, LOG_LEVEL_DEBUG, sip, 0, EV_FIRST_SYN); // Optional: Log first SYN
+    } else {
+        // Second (or later) SYN within the window -> penalty
+        __u8 new_score = SCORE_HALF_OPEN_INC; // Start with the increment value
+        __u8 *scr = bpf_map_lookup_elem(&score_map, &sip);
+        if (scr) { // If score exists, add increment, checking for max
+            new_score = (*scr + SCORE_HALF_OPEN_INC <= SCORE_MAX) ? *scr + SCORE_HALF_OPEN_INC : SCORE_MAX;
+        }
+        // Update map with the calculated new_score
+        bpf_map_update_elem(&score_map, &sip, &new_score, BPF_ANY);
+        maybe_ban_ip(sip, now, new_score);
+
+        log_event(ctx, LOG_LEVEL_WARNING, sip, new_score, EV_SYN_RETRY_PENALTY); // Log the penalty
+
+        // Reset the SYN counter after penalty
+        new_val.ts_ns = now; // Update timestamp to restart window
+        bpf_map_update_elem(&ip_syn_count_map, &sip, &new_val, BPF_ANY);
+    }
+}
+
+// Helper function to handle TCP ACK packets (handshake completion)
+static __always_inline void handle_tcp_ack(struct xdp_md *ctx,
+                                         struct iphdr *ip,
+                                         struct tcphdr *tcp,
+                                         __u64 now)
+{
+    struct flow_key fk = { ip->saddr, ip->daddr, tcp->source, tcp->dest, IPPROTO_TCP };
+
+    // Check if not already established
+    __u32 sip = ip->saddr;
+    struct syn_val *sv = bpf_map_lookup_elem(&ip_syn_count_map, &sip);
+    __u64 *est = bpf_map_lookup_elem(&established_map, &fk);
+
+    // Only mark established if not already established AND we've seen a SYN from this IP
+    if (!est && sv) {
+        __u64 one = 1;
+        bpf_map_update_elem(&established_map, &fk, &one, BPF_ANY);
+
+        // Add reverse flow key for bidirectional fast-path
+        struct flow_key rev_fk = { fk.dst_ip, fk.src_ip, fk.dst_port, fk.src_port, fk.proto };
+        bpf_map_update_elem(&established_map, &rev_fk, &one, BPF_ANY);
+
+        // Delete the SYN tracking entry now that handshake is complete
+        bpf_map_delete_elem(&ip_syn_count_map, &sip);
+
+        // Decrement score for successful handshake completion (if score exists)
+        __u8 *scr = bpf_map_lookup_elem(&score_map, &ip->saddr);
+        if (scr) {
+            __u8 old = *scr;
+            __u8 dec = SCORE_HANDSHAKE_DEC;
+            __u8 new = old > dec ? old - dec : 0;
+            if (new != old) { // Update only if changed
+                bpf_map_update_elem(&score_map, &ip->saddr, &new, BPF_ANY);
+            }
+        }
+        log_event(ctx, LOG_LEVEL_INFO, fk.src_ip, 0, EV_HANDSHAKE_COMPLETE);
+    }
+}
+
 // Helper function to process the packet
 static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *data_end)
 {
@@ -236,68 +309,12 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
 
         // Track SYN packets
         if (tcp->syn && !tcp->ack) {
-            __u32 sip = ip->saddr;
-            struct syn_val *val = bpf_map_lookup_elem(&ip_syn_count_map, &sip);
-            struct syn_val new_val = { .ts_ns = now };
-
-            if (!val || (now - val->ts_ns > WINDOW_NS)) {
-                // First SYN from this IP in this window, or map entry expired
-                bpf_map_update_elem(&ip_syn_count_map, &sip, &new_val, BPF_ANY);
-                 log_event(ctx, LOG_LEVEL_DEBUG, sip, 0, EV_FIRST_SYN); // Optional: Log first SYN
-            } else {
-                // Second (or later) SYN within the window -> penalty
-                __u8 *scr = bpf_map_lookup_elem(&score_map, &sip);
-                __u8 init = 0;
-                if (!scr) {
-                    // Initialize score if not present
-                    bpf_map_update_elem(&score_map, &sip, &init, BPF_ANY);
-                    scr = &init;
-                }
-                __u8 score = (*scr + SCORE_HALF_OPEN_INC <= SCORE_MAX)
-                               ? *scr + SCORE_HALF_OPEN_INC
-                               : SCORE_MAX;
-                bpf_map_update_elem(&score_map, &sip, &score, BPF_ANY);
-                maybe_ban_ip(sip, now, score);
-
-                log_event(ctx, LOG_LEVEL_WARNING, sip, score, EV_SYN_RETRY_PENALTY); // Log the penalty
-
-                // Reset the SYN counter after penalty
-                new_val.ts_ns = now; // Update timestamp to restart window
-                bpf_map_update_elem(&ip_syn_count_map, &sip, &new_val, BPF_ANY);
-            }
+            handle_tcp_syn(ctx, ip, tcp, now);
         }
 
         // Detect handshake completion / ACK received
         if (tcp->ack && !tcp->syn) {
-            struct flow_key fk = { ip->saddr, ip->daddr, tcp->source, tcp->dest, IPPROTO_TCP };
-            // __u64 *syn_ts = bpf_map_lookup_elem(&syn_map, &fk); // Old check
-            // if (syn_ts) { // Old check
-
-            // Check if not already established
-            __u32 sip = ip->saddr;
-            struct syn_val *sv = bpf_map_lookup_elem(&ip_syn_count_map, &sip);
-            __u64 *est = bpf_map_lookup_elem(&established_map, &fk);
-            if (!est && sv) {
-                __u64 one = 1;
-                // bpf_map_delete_elem(&syn_map, &fk); // Old delete
-                bpf_map_update_elem(&established_map, &fk, &one, BPF_ANY);
-
-                // Delete the SYN tracking entry now that handshake is complete
-                bpf_map_delete_elem(&ip_syn_count_map, &sip);
-
-                // Decrement score for successful handshake completion (if score exists)
-                __u8 *scr = bpf_map_lookup_elem(&score_map, &ip->saddr);
-                if (scr) {
-                    __u8 old = *scr;
-                    __u8 dec = SCORE_HANDSHAKE_DEC;
-                    __u8 new = old > dec ? old - dec : 0;
-                    if (new != old) { // Update only if changed
-                        bpf_map_update_elem(&score_map, &ip->saddr, &new, BPF_ANY);
-                    }
-                }
-                log_event(ctx, LOG_LEVEL_INFO, fk.src_ip, 0, EV_HANDSHAKE_COMPLETE);
-            }
-            // } // End old check
+            handle_tcp_ack(ctx, ip, tcp, now);
         }
 
     } else if (ip->protocol == IPPROTO_UDP) {
@@ -327,15 +344,6 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
         stats->bytes += pkt_size;
         stats->last_seen = now;
 
-        // If above threshold, block
-#if 0
-        if (stats->packet_count > PACKET_THRESHOLD) {
-            stats->blocked += 1;
-            bpf_map_update_elem(&ip_traffic_map, &key, stats, BPF_ANY);
-            log_event(ctx, LOG_LEVEL_WARNING, key.ip, stats->packet_count, EV_BLOCK);
-            return XDP_DROP;
-        }
-#endif
 
         bpf_map_update_elem(&ip_traffic_map, &key, stats, BPF_ANY);
     } else {

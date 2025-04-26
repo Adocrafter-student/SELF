@@ -111,6 +111,21 @@ struct flow_key {
     __u8 proto;
 };
 
+// Tracks packet & byte counts per IP per window
+struct flood_stats {
+    __u64 pkt_count;
+    __u64 byte_count;
+    __u64 last_ts;   // nanoseconds of last reset
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 1000000);
+    __uint(pinning,    LIBBPF_PIN_BY_NAME);
+    __type(key,   __u32);        // src IP
+    __type(value, struct flood_stats);
+} flood_stats_map SEC(".maps");
+
 // Helper function to log events
 static __always_inline void log_event(struct xdp_md *ctx,
                                      __u32 level,

@@ -42,6 +42,10 @@ cleanup_files() {
     if [ -f "/sys/fs/bpf/score_map" ]; then
         rm -f /sys/fs/bpf/score_map
     fi
+    # Remove the flood_stats_map
+    if [ -f "/sys/fs/bpf/flood_stats_map" ]; then
+        rm -f /sys/fs/bpf/flood_stats_map
+    fi
 
     echo "File cleanup completed."
 }

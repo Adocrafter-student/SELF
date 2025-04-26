@@ -33,6 +33,7 @@
 #define IP_SYN_COUNT_MAP_PATH "/sys/fs/bpf/ip_syn_count_map"
 #define ESTABLISHED_MAP_PATH "/sys/fs/bpf/established_map"
 #define SCORE_MAP_PATH "/sys/fs/bpf/score_map"
+#define FLOOD_STATS_MAP_PATH "/sys/fs/bpf/flood_stats_map"
 
 // Key for the map
 struct ip_key {
@@ -55,6 +56,13 @@ struct log_entry {
     __u64 packets;
     __u8 code;      // Event code from ddos_event_code enum
     __u64 timestamp;
+};
+
+// Structure for flood statistics
+struct flood_stats {
+    __u64 pkt_count;
+    __u64 byte_count;
+    __u64 last_ts;   // nanoseconds of last reset
 };
 
 // Globals
@@ -179,6 +187,7 @@ static void cleanup_pinned_maps(void)
         IP_SYN_COUNT_MAP_PATH,
         ESTABLISHED_MAP_PATH,
         SCORE_MAP_PATH,
+        FLOOD_STATS_MAP_PATH,
         NULL
     };
 
@@ -280,6 +289,7 @@ static int load_bpf_program(int test_only)
     if (pin_bpf_map(obj, "ip_syn_count_map", IP_SYN_COUNT_MAP_PATH) < 0) goto cleanup;
     if (pin_bpf_map(obj, "established_map", ESTABLISHED_MAP_PATH) < 0) goto cleanup;
     if (pin_bpf_map(obj, "score_map", SCORE_MAP_PATH) < 0) goto cleanup;
+    if (pin_bpf_map(obj, "flood_stats_map", FLOOD_STATS_MAP_PATH) < 0) goto cleanup;
 
     // Get log buffer map
     struct bpf_map *log_map = bpf_object__find_map_by_name(obj, "log_buffer");

@@ -6,6 +6,7 @@
 #include <linux/in.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
+#include <linux/icmp.h>
 #include "ddos_events.h"
 #include "self_defs.h"
 
@@ -234,6 +235,53 @@ static __always_inline void handle_tcp_ack(struct xdp_md *ctx,
     }
 }
 
+// Helper: detect & score L3/4 floods per-IP
+static __always_inline void handle_flood(struct xdp_md *ctx,
+                                         __u32 sip,
+                                         __u64 pkt_size,
+                                         __u64 now,
+                                         __u64 pkt_thresh,
+                                         __u64 bytes_thresh
+                                         )
+{
+    struct flood_stats *st =
+        bpf_map_lookup_elem(&flood_stats_map, &sip);
+    struct flood_stats upd = {1, pkt_size, now}; // Initialize with current packet
+
+    if (st && (now - st->last_ts <= FLOOD_WINDOW_NS)) {
+        // Within the window, accumulate
+        upd.pkt_count  = st->pkt_count + 1;
+        upd.byte_count = st->byte_count + pkt_size;
+        upd.last_ts    = st->last_ts; // Keep the original window start time
+    } else {
+        // Window expired or first packet, log reset
+        log_event(ctx, LOG_LEVEL_DEBUG, sip, 0, EV_FLOOD_RESET);
+        // upd is already initialized correctly for a new window
+    }
+
+    // threshold check
+    if (upd.pkt_count > pkt_thresh || upd.byte_count > bytes_thresh) {
+        // bump score & maybe ban
+        __u8 new_score = SCORE_FLOOD_INC;
+        __u8 *scr = bpf_map_lookup_elem(&score_map, &sip);
+        if (scr) {
+            __u8 sum = *scr + SCORE_FLOOD_INC;
+            new_score = sum > SCORE_MAX ? SCORE_MAX : sum;
+        }
+        bpf_map_update_elem(&score_map, &sip, &new_score, BPF_ANY);
+        maybe_ban_ip(sip, now, new_score);
+        log_event(ctx, LOG_LEVEL_WARNING, sip, new_score, EV_FLOOD_DETECTED);
+
+        // Reset stats after penalty by setting counts to 0 and updating timestamp
+        upd.pkt_count  = 0;
+        upd.byte_count = 0;
+        upd.last_ts    = now;
+    }
+
+    // Single map update call
+    bpf_map_update_elem(&flood_stats_map, &sip, &upd, BPF_ANY);
+}
+
 // Helper function to process the packet
 static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *data_end)
 {
@@ -254,115 +302,88 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
         return XDP_PASS;
     }
 
-    // Fast path for established flows
-    void *l4hdr_fast = (void *)ip + sizeof(*ip);
-    if (l4hdr_fast + sizeof(struct tcphdr) > data_end) {
-        return XDP_PASS;
-    }
-
-    __u16 src_port = 0, dst_port = 0;
-    if (ip->protocol == IPPROTO_TCP) {
-        struct tcphdr *tcp = l4hdr_fast;
-        if ((void *)(tcp + 1) > data_end) {
-            return XDP_PASS;
-        }
-        src_port = tcp->source;
-        dst_port = tcp->dest;
-    } else if (ip->protocol == IPPROTO_UDP) {
-        struct udphdr *udp = l4hdr_fast;
-        if ((void *)(udp + 1) > data_end) {
-            return XDP_PASS;
-        }
-        src_port = udp->source;
-        dst_port = udp->dest;
-    }
-
-    struct flow_key fk = { ip->saddr, ip->daddr, src_port, dst_port, ip->protocol };
-    __u64 *est = bpf_map_lookup_elem(&established_map, &fk);
-    if (est) {
-        log_event(ctx, LOG_LEVEL_INFO, fk.src_ip, 0, EV_ESTABLISHED);
-        return XDP_PASS;
-    }
-
-    // Check if IP is blocked
-    __u64 *block_until = bpf_map_lookup_elem(&blocked_ips_map, &ip->saddr);
+    // Early blocked-IP check
+    __u32 sip = ip->saddr;
+    __u64 now = bpf_ktime_get_ns();
+    __u64 *block_until = bpf_map_lookup_elem(&blocked_ips_map, &sip);
     if (block_until) {
-        __u64 now = bpf_ktime_get_ns();
         if (*block_until == 0 || now < *block_until) {
-            // IP is blocked, drop the packet
-            log_event(ctx, LOG_LEVEL_WARNING, ip->saddr, 0, EV_MANUAL_BLOCK);
+            log_event(ctx, LOG_LEVEL_WARNING, sip, 0, EV_MANUAL_BLOCK);
             return XDP_DROP;
-        } else {
-            // Block has expired, remove from blocked map and log the unblock
-            bpf_map_delete_elem(&blocked_ips_map, &ip->saddr);
-            log_event(ctx, LOG_LEVEL_INFO, ip->saddr, 0, EV_UNBLOCK);
         }
+        // ban expired
+        bpf_map_delete_elem(&blocked_ips_map, &sip);
+        log_event(ctx, LOG_LEVEL_INFO, sip, 0, EV_UNBLOCK);
     }
 
-    // Prepare the map key
+    __u64 pkt_size = (void *)data_end - (void *)data;
+    __u16 src_port = 0, dst_port = 0;
     struct ip_key key = {0};
     key.ip = ip->saddr;
 
-    // Figure out if it's TCP or UDP so we can store the source port
-    void *l4hdr = (void *)ip + sizeof(*ip);
+    if (ip->protocol == IPPROTO_TCP) {
+        void *l4 = (void*)ip + ip->ihl*4;
+        struct tcphdr *tcp = l4;
+        if ((void*)(tcp + 1) > data_end)
+            return XDP_PASS;
+        src_port = tcp->source;
+        dst_port = tcp->dest;
+        key.port = src_port;
 
-    // Current time in nanoseconds - get once
-    __u64 now = bpf_ktime_get_ns();
+        // Flood detection only for data packets (ACK without SYN)
+        if (tcp->ack && !tcp->syn)
+            handle_flood(ctx, ip->saddr, pkt_size, now, TCP_PKT_THRESH, TCP_BYTES_THRESH);
 
-    // Basic boundary check: we need at least the size of a TCP or UDP header
-    if (l4hdr + sizeof(struct tcphdr) > data_end) {
-        // Not enough room even for a TCP/UDP header, just pass
+        // SYN tracking
+        if (tcp->syn && !tcp->ack)
+            handle_tcp_syn(ctx, ip, tcp, now);
+
+        // Handshake complete
+        if (tcp->ack && !tcp->syn)
+            handle_tcp_ack(ctx, ip, tcp, now);
+
+        // Fast-path for established flows
+        struct flow_key fk = { ip->saddr, ip->daddr, src_port, dst_port, IPPROTO_TCP };
+        if (bpf_map_lookup_elem(&established_map, &fk)) {
+            log_event(ctx, LOG_LEVEL_INFO, fk.src_ip, 0, EV_ESTABLISHED);
+            return XDP_PASS;
+        }
+    }
+    else if (ip->protocol == IPPROTO_UDP) {
+        void *l4 = (void*)ip + ip->ihl*4;
+        struct udphdr *udp = l4;
+        if ((void*)(udp + 1) > data_end)
+            return XDP_PASS;
+        src_port = udp->source;
+        dst_port = udp->dest;
+        key.port = src_port;
+        handle_flood(ctx, ip->saddr, pkt_size, now, UDP_PKT_THRESH, UDP_BYTES_THRESH);
+    }
+    else if (ip->protocol == IPPROTO_ICMP) {
+        void *l4 = (void*)ip + ip->ihl*4;
+        struct icmphdr *icmp = l4;
+        if ((void*)(icmp + 1) > data_end)
+            return XDP_PASS;
+        key.port = 0;
+        handle_flood(ctx, ip->saddr, pkt_size, now, ICMP_PKT_THRESH, ICMP_BYTES_THRESH);
+    } else {
+        // not TCP/UDP/ICMP
         return XDP_PASS;
     }
 
-    if (ip->protocol == IPPROTO_TCP) {
-        struct tcphdr *tcp = l4hdr;
-        if ((void *)(tcp + 1) > data_end) {
-            return XDP_PASS;
-        }
-        key.port = tcp->source;
-
-        // Track SYN packets
-        if (tcp->syn && !tcp->ack) {
-            handle_tcp_syn(ctx, ip, tcp, now);
-        }
-
-        // Detect handshake completion / ACK received
-        if (tcp->ack && !tcp->syn) {
-            handle_tcp_ack(ctx, ip, tcp, now);
-        }
-
-    } else if (ip->protocol == IPPROTO_UDP) {
-        struct udphdr *udp = l4hdr;
-        if ((void *)(udp + 1) > data_end) {
-            return XDP_PASS;
-        }
-        key.port = udp->source;
-    } else {
-        key.port = 0;  // For non-TCP/UDP, just store 0 as port
-    }
-
-    // Packet length
-    __u64 pkt_size = (void *)data_end - (void *)data;
-
-    // Lookup existing stats in the map
+    // Packet statistics
     struct traffic_stats *stats = bpf_map_lookup_elem(&ip_traffic_map, &key);
     if (stats) {
-        // Reset if the last packet was too long ago
         if (now - stats->last_seen > RATE_WINDOW) {
             stats->packet_count = 0;
             stats->blocked = 0;
             log_event(ctx, LOG_LEVEL_INFO, key.ip, stats->packet_count, EV_RESET);
         }
-
         stats->packet_count += 1;
         stats->bytes += pkt_size;
         stats->last_seen = now;
-
-
         bpf_map_update_elem(&ip_traffic_map, &key, stats, BPF_ANY);
     } else {
-        // Insert a new entry
         struct traffic_stats new_stats = {
             .packet_count = 1,
             .last_seen    = now,

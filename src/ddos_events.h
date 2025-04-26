@@ -15,7 +15,10 @@ enum ddos_event_code {
     EV_ESTABLISHED = 9, // TCP established connection
     EV_FIRST_SYN = 10,      // First SYN from IP in window
     EV_SYN_RETRY_PENALTY = 11, // Score increase due to SYN retry
-    EV_MAX = 12            // Maximum event code
+    EV_FLOOD_DETECTED = 12, // Flood detected
+    EV_FLOOD_RESET = 13,    // Flood window reset
+    EV_FLOOD_UPDATE = 14,   // Flood update
+    EV_MAX = 15            // Maximum event code
 };
 
 // String mappings for event codes
@@ -32,6 +35,9 @@ static const char *ddos_event_strings[] = {
     [EV_ESTABLISHED] = "[kern] TCP established connection",
     [EV_FIRST_SYN] = "[kern] First SYN received",
     [EV_SYN_RETRY_PENALTY] = "[kern] SYN retry penalty applied",
+    [EV_FLOOD_DETECTED] = "[kern] Flood detected",
+    [EV_FLOOD_RESET] = "[kern] Flood window reset",
+    [EV_FLOOD_UPDATE] = "[kern] Flood update",
     [EV_MAX] = "Unknown event"
 };
 

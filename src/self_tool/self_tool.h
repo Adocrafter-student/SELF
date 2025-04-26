@@ -14,6 +14,7 @@ enum self_tool_cmd {
     SELF_TOOL_CMD_UNBLOCK,
     SELF_TOOL_CMD_ESTABLISHED,
     SELF_TOOL_CMD_SCORES,
+    SELF_TOOL_CMD_LIST_FLOOD,
     SELF_TOOL_CMD_MAX
 };
 
@@ -44,6 +45,13 @@ struct flow_key {
     uint16_t src_port;
     uint16_t dst_port;
     uint8_t  proto;
+};
+
+// Struktura za flood statistiku (mora odgovarati BPF struct)
+struct flood_stats {
+    uint64_t pkt_count;
+    uint64_t byte_count;
+    uint64_t last_ts;   // nanoseconds of last reset
 };
 
 #endif // SELF_TOOL_H 

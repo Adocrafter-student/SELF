@@ -30,4 +30,22 @@
 #define SCORE_HANDSHAKE_DEC   5  // Score decrease for successful handshake
 #define SCORE_MAX            100  // Maximum possible score
 
+// Flood detection window
+#define FLOOD_WINDOW_NS    1000000000ULL      // 1 second in ns
+
+// Generic fallback thresholds
+#define PKT_THRESH         300                // ~300 packets/sec
+#define BYTES_THRESH       (2 * 1024 * 1024)  // 2 MB/s
+#define SCORE_FLOOD_INC    15                 // bump for flood detection
+
+// Protocol-specific thresholds
+#define ICMP_PKT_THRESH    100                // ICMP: easier to trigger
+#define ICMP_BYTES_THRESH  (256 * 1024)       // 256 KB/s
+
+#define UDP_PKT_THRESH     300                // UDP: slightly higher
+#define UDP_BYTES_THRESH   (1 * 1024 * 1024)  // 1 MB/s
+
+#define TCP_PKT_THRESH     1000                // TCP: conservative
+#define TCP_BYTES_THRESH   (1 * 1024 * 1024)  // 1 MB/s
+
 #endif // SELF_DEFS_H 

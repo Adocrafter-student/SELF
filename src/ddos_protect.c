@@ -330,6 +330,13 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
         dst_port = tcp->dest;
         key.port = src_port;
 
+        // Fast-path for established flows
+        struct flow_key fk = { ip->saddr, ip->daddr, src_port, dst_port, IPPROTO_TCP };
+        if (bpf_map_lookup_elem(&established_map, &fk)) {
+            log_event(ctx, LOG_LEVEL_INFO, fk.src_ip, 0, EV_ESTABLISHED);
+            return XDP_PASS;
+        }
+
         // Flood detection only for data packets (ACK without SYN)
         if (tcp->ack && !tcp->syn)
             handle_flood(ctx, ip->saddr, pkt_size, now, TCP_PKT_THRESH, TCP_BYTES_THRESH);
@@ -342,12 +349,6 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
         if (tcp->ack && !tcp->syn)
             handle_tcp_ack(ctx, ip, tcp, now);
 
-        // Fast-path for established flows
-        struct flow_key fk = { ip->saddr, ip->daddr, src_port, dst_port, IPPROTO_TCP };
-        if (bpf_map_lookup_elem(&established_map, &fk)) {
-            log_event(ctx, LOG_LEVEL_INFO, fk.src_ip, 0, EV_ESTABLISHED);
-            return XDP_PASS;
-        }
     }
     else if (ip->protocol == IPPROTO_UDP) {
         void *l4 = (void*)ip + ip->ihl*4;

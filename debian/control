@@ -1,7 +1,7 @@
 Source: self
 Section: net
 Priority: optional
-Maintainer: Administrator <admin@example.com>
+Maintainer: Administrator <adnan.duharkic@stu.ibu.edu.ba>
 Build-Depends: debhelper (>= 9), clang, libelf-dev, libbpf-dev
 Standards-Version: 4.5.0
 

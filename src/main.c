@@ -1,3 +1,5 @@
+// Licensed under CC BY-NC 4.0 (https://creativecommons.org/licenses/by-nc/4.0/)
+// © 2025 Adnan Duharkic — Non-commercial use only
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>

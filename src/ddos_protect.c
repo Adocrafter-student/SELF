@@ -1,3 +1,5 @@
+// Licensed under CC BY-NC 4.0 (https://creativecommons.org/licenses/by-nc/4.0/)
+// © 2025 Adnan Duharkic — Non-commercial use only
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
@@ -252,13 +254,11 @@ static __always_inline void handle_flood(struct xdp_md *ctx,
         // Within the window, accumulate
         upd.pkt_count  = st->pkt_count + 1;
         upd.byte_count = st->byte_count + pkt_size;
-        upd.last_ts    = st->last_ts; // Keep the original window start time
+        upd.last_ts    = st->last_ts;
     } else {
         // Window expired or first packet, log reset
         log_event(ctx, LOG_LEVEL_DEBUG, sip, 0, EV_FLOOD_RESET);
-        // upd is already initialized correctly for a new window
     }
-
     // threshold check
     if (upd.pkt_count > pkt_thresh || upd.byte_count > bytes_thresh) {
         // bump score & maybe ban
@@ -272,13 +272,12 @@ static __always_inline void handle_flood(struct xdp_md *ctx,
         maybe_ban_ip(sip, now, new_score);
         log_event(ctx, LOG_LEVEL_WARNING, sip, new_score, EV_FLOOD_DETECTED);
 
-        // Reset stats after penalty by setting counts to 0 and updating timestamp
+        // Reseting stats after penalty by setting counts to 0 and updating timestamp
         upd.pkt_count  = 0;
         upd.byte_count = 0;
         upd.last_ts    = now;
     }
 
-    // Single map update call
     bpf_map_update_elem(&flood_stats_map, &sip, &upd, BPF_ANY);
 }
 

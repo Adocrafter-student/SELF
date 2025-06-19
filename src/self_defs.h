@@ -1,3 +1,5 @@
+// Licensed under CC BY-NC 4.0 (https://creativecommons.org/licenses/by-nc/4.0/)
+// © 2025 Adnan Duharkic — Non-commercial use only
 #ifndef SELF_DEFS_H
 #define SELF_DEFS_H
 

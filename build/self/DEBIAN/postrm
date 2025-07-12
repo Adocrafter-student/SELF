@@ -46,6 +46,9 @@ cleanup_files() {
     if [ -f "/sys/fs/bpf/flood_stats_map" ]; then
         rm -f /sys/fs/bpf/flood_stats_map
     fi
+    if [ -f "/sys/fs/bpf/self_config_map" ]; then
+        rm -f /sys/fs/bpf/self_config_map
+    fi
 
     echo "File cleanup completed."
 }

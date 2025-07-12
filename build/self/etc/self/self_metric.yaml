@@ -15,13 +15,16 @@ flood_detection:
   window_ns: 1000000000 # 1 second
 
 thresholds:
-  packets:
-    generic: 300
-    icmp: 100
-    udp: 300
-    tcp: 1000
-  bytes:
-    generic: 2097152 # 2 MB
-    icmp: 262144 # 256 KB
-    udp: 1048576 # 1 MB
-    tcp: 1048576 # 1 MB 
+  generic:
+    packets: 300
+    bytes: 2097152 # 2 MB
+    score_flood_inc: 15
+  icmp:
+    packets: 100
+    bytes: 262144 # 256 KB
+  udp:
+    packets: 300
+    bytes: 1048576 # 1 MB
+  tcp:
+    packets: 1000
+    bytes: 1048576 # 1 MB 

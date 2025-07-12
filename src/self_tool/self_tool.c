@@ -16,6 +16,7 @@
 #define ESTABLISHED_MAP_PATH "/sys/fs/bpf/established_map"
 #define SCORE_MAP_PATH "/sys/fs/bpf/score_map"
 #define FLOOD_STATS_MAP_PATH "/sys/fs/bpf/flood_stats_map"
+#define SELF_CONFIG_MAP_PATH "/sys/fs/bpf/self_config_map"
 #define BPF_OBJ_PATH "/usr/lib/self/ddos_protect.o"
 
 // Funkcije za formatiranje izlaza
@@ -311,6 +312,42 @@ static int list_flood_stats(int map_fd) {
     return 0;
 }
 
+static int show_config(int map_fd) {
+    struct bpf_config cfg;
+    __u32 key = 0;
+
+    if (bpf_map_lookup_elem(map_fd, &key, &cfg) != 0) {
+        printf("Failed to read config map: %s\n", strerror(errno));
+        return -1;
+    }
+
+    printf("Current SELF Configuration:\n");
+    printf("----------------------------------------\n");
+    printf("Score Thresholds:\n");
+    printf("  Permanent Ban: %d\n", cfg.score_permanent_ban);
+    printf("  15 Days Ban: %d\n", cfg.score_15_days_ban);
+    printf("  4 Days Ban: %d\n", cfg.score_4_days_ban);
+    printf("  1 Day Ban: %d\n", cfg.score_1_day_ban);
+    printf("  15 Minutes Ban: %d\n", cfg.score_15_min_ban);
+    printf("  1 Minute Ban: %d\n", cfg.score_1_min_ban);
+    printf("  15 Seconds Ban: %d\n", cfg.score_15_sec_ban);
+    printf("\nScore Adjustments:\n");
+    printf("  Half-open Connection: +%d\n", cfg.score_half_open_inc);
+    printf("  Handshake Complete: -%d\n", cfg.score_handshake_dec);
+    printf("  Flood Detection: +%d\n", cfg.score_flood_inc);
+    printf("  Maximum Score: %d\n", cfg.score_max);
+    printf("\nFlood Detection:\n");
+    printf("  Window: %lu ns\n", cfg.flood_window_ns);
+    printf("\nThresholds:\n");
+    printf("  Generic: %d packets, %d bytes\n", cfg.generic_pkt_thresh, cfg.generic_bytes_thresh);
+    printf("  ICMP: %d packets, %d bytes\n", cfg.icmp_pkt_thresh, cfg.icmp_bytes_thresh);
+    printf("  UDP: %d packets, %d bytes\n", cfg.udp_pkt_thresh, cfg.udp_bytes_thresh);
+    printf("  TCP: %d packets, %d bytes\n", cfg.tcp_pkt_thresh, cfg.tcp_bytes_thresh);
+    printf("----------------------------------------\n");
+
+    return 0;
+}
+
 static void print_usage(const char *prog_name) {
     printf("Usage: %s <command> [options]\n", prog_name);
     printf("Commands:\n");
@@ -323,6 +360,7 @@ static void print_usage(const char *prog_name) {
     printf("  established   - List all established TCP flows\n");
     printf("  scores        - List all IP scores\n");
     printf("  flood-stats   - List current flood statistics per IP\n");
+    printf("  config        - Show current SELF configuration\n");
     printf("\nBlock command usage:\n");
     printf("  %s block <ip> [duration]\n", prog_name);
     printf("  duration format: 2d13h14m5s (days, hours, minutes, seconds)\n");
@@ -405,7 +443,7 @@ static int show_stats(int map_fd) {
 }
 
 int main(int argc, char **argv) {
-    int map_fd, blocked_map_fd, established_map_fd, score_map_fd, flood_map_fd, err;
+    int map_fd, blocked_map_fd, established_map_fd, score_map_fd, flood_map_fd, config_map_fd, err;
     enum self_tool_cmd cmd;
 
     if (argc < 2) {
@@ -442,6 +480,8 @@ int main(int argc, char **argv) {
         cmd = SELF_TOOL_CMD_SCORES;
     } else if (strcmp(argv[1], "flood-stats") == 0) {
         cmd = SELF_TOOL_CMD_LIST_FLOOD;
+    } else if (strcmp(argv[1], "config") == 0) {
+        cmd = SELF_TOOL_CMD_CONFIG;
     } else {
         printf("Unknown command: %s\n", argv[1]);
         print_usage(argv[0]);
@@ -489,6 +529,17 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    config_map_fd = bpf_obj_get(SELF_CONFIG_MAP_PATH);
+    if (config_map_fd < 0) {
+        printf("Failed to open config map (%s): %s\n", SELF_CONFIG_MAP_PATH, strerror(errno));
+        close(map_fd);
+        close(blocked_map_fd);
+        close(established_map_fd);
+        close(score_map_fd);
+        close(flood_map_fd);
+        return 1;
+    }
+
     // Execute command
     switch (cmd) {
         case SELF_TOOL_CMD_LIST:
@@ -518,6 +569,9 @@ int main(int argc, char **argv) {
         case SELF_TOOL_CMD_LIST_FLOOD:
             err = list_flood_stats(flood_map_fd);
             break;
+        case SELF_TOOL_CMD_CONFIG:
+            err = show_config(config_map_fd);
+            break;
         default:
             err = 1;
             break;
@@ -528,5 +582,6 @@ int main(int argc, char **argv) {
     close(established_map_fd);
     close(score_map_fd);
     close(flood_map_fd);
+    close(config_map_fd);
     return err;
 } 

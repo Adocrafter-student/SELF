@@ -23,6 +23,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include "config.h"
+#include "bpf_shared_config.h"
 
 // Log levels
 #define LOG_LEVEL_DEBUG   0
@@ -37,6 +38,7 @@
 #define ESTABLISHED_MAP_PATH "/sys/fs/bpf/established_map"
 #define SCORE_MAP_PATH "/sys/fs/bpf/score_map"
 #define FLOOD_STATS_MAP_PATH "/sys/fs/bpf/flood_stats_map"
+#define SELF_CONFIG_MAP_PATH "/sys/fs/bpf/self_config_map"
 
 // Key for the map
 struct ip_key {
@@ -107,6 +109,48 @@ static void detach_xdp(void)
         bpf_link__destroy(prog_link);
         prog_link = NULL;
     }
+}
+
+static int update_bpf_config_map(struct bpf_object *bpf_obj, const struct self_config *config)
+{
+    struct bpf_map *map = bpf_object__find_map_by_name(bpf_obj, "self_config_map");
+    if (!map) {
+        LOG_ERROR("Failed to find 'self_config_map' in BPF object");
+        return -1;
+    }
+
+    struct bpf_config bpf_cfg = {
+        .score_permanent_ban = config->score_permanent_ban,
+        .score_15_days_ban = config->score_15_days_ban,
+        .score_4_days_ban = config->score_4_days_ban,
+        .score_1_day_ban = config->score_1_day_ban,
+        .score_15_min_ban = config->score_15_min_ban,
+        .score_1_min_ban = config->score_1_min_ban,
+        .score_15_sec_ban = config->score_15_sec_ban,
+        .score_half_open_inc = config->score_half_open_inc,
+        .score_handshake_dec = config->score_handshake_dec,
+        .score_flood_inc = config->score_flood_inc,
+        .score_max = config->score_max,
+        .flood_window_ns = config->flood_window_ns,
+        .generic_pkt_thresh = config->generic_pkt_thresh,
+        .generic_bytes_thresh = config->generic_bytes_thresh,
+        .icmp_pkt_thresh = config->icmp_pkt_thresh,
+        .icmp_bytes_thresh = config->icmp_bytes_thresh,
+        .udp_pkt_thresh = config->udp_pkt_thresh,
+        .udp_bytes_thresh = config->udp_bytes_thresh,
+        .tcp_pkt_thresh = config->tcp_pkt_thresh,
+        .tcp_bytes_thresh = config->tcp_bytes_thresh,
+    };
+
+    __u32 key = 0;
+    int err = bpf_map_update_elem(bpf_map__fd(map), &key, &bpf_cfg, BPF_ANY);
+    if (err) {
+        LOG_ERROR("Failed to update 'self_config_map': %s", strerror(errno));
+        return -1;
+    }
+
+    LOG_INFO("BPF config map updated successfully.");
+    return 0;
 }
 
 static void signal_handler(int sig)
@@ -191,6 +235,7 @@ static void cleanup_pinned_maps(void)
         ESTABLISHED_MAP_PATH,
         SCORE_MAP_PATH,
         FLOOD_STATS_MAP_PATH,
+        SELF_CONFIG_MAP_PATH,
         NULL
     };
 
@@ -237,7 +282,7 @@ static int pin_bpf_map(struct bpf_object *obj, const char *map_name, const char 
 }
 
 // Function to load and attach the BPF program
-static int load_bpf_program(int test_only)
+static int load_bpf_program(int test_only, const struct self_config *config)
 {
     struct bpf_object *obj = NULL;
     struct bpf_program *bpf_prog;
@@ -270,6 +315,11 @@ static int load_bpf_program(int test_only)
         return -1;
     }
 
+    if (update_bpf_config_map(obj, config) != 0) {
+        LOG_ERROR("Failed to update BPF config map");
+        goto cleanup;
+    }
+    
     bpf_prog = bpf_object__find_program_by_name(obj, "xdp_ddos_protect");
     if (!bpf_prog) {
         LOG_ERROR("Could not find program 'xdp_ddos_protect'");
@@ -293,6 +343,7 @@ static int load_bpf_program(int test_only)
     if (pin_bpf_map(obj, "established_map", ESTABLISHED_MAP_PATH) < 0) goto cleanup;
     if (pin_bpf_map(obj, "score_map", SCORE_MAP_PATH) < 0) goto cleanup;
     if (pin_bpf_map(obj, "flood_stats_map", FLOOD_STATS_MAP_PATH) < 0) goto cleanup;
+    if (pin_bpf_map(obj, "self_config_map", SELF_CONFIG_MAP_PATH) < 0) goto cleanup;
 
     // Get log buffer map
     struct bpf_map *log_map = bpf_object__find_map_by_name(obj, "log_buffer");
@@ -473,7 +524,7 @@ int main(int argc, char **argv)
     signal(SIGTERM, signal_handler);
 
     LOG_INFO("[Main] Loading eBPF program...");
-    if (load_bpf_program(test_mode) != 0) {
+    if (load_bpf_program(test_mode, &config) != 0) {
         LOG_ERROR("Error loading BPF program");
         logger_close();
         return EXIT_FAILURE;

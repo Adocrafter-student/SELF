@@ -39,6 +39,8 @@
 #define SCORE_MAP_PATH "/sys/fs/bpf/score_map"
 #define FLOOD_STATS_MAP_PATH "/sys/fs/bpf/flood_stats_map"
 #define SELF_CONFIG_MAP_PATH "/sys/fs/bpf/self_config_map"
+#define WHITELIST_MAP_PATH "/sys/fs/bpf/whitelist_map"
+#define WHITELIST_CONF_PATH "/etc/self/whitelist.conf"
 
 // Key for the map
 struct ip_key {
@@ -236,6 +238,7 @@ static void cleanup_pinned_maps(void)
         SCORE_MAP_PATH,
         FLOOD_STATS_MAP_PATH,
         SELF_CONFIG_MAP_PATH,
+        WHITELIST_MAP_PATH,
         NULL
     };
 
@@ -344,6 +347,7 @@ static int load_bpf_program(int test_only, const struct self_config *config)
     if (pin_bpf_map(obj, "score_map", SCORE_MAP_PATH) < 0) goto cleanup;
     if (pin_bpf_map(obj, "flood_stats_map", FLOOD_STATS_MAP_PATH) < 0) goto cleanup;
     if (pin_bpf_map(obj, "self_config_map", SELF_CONFIG_MAP_PATH) < 0) goto cleanup;
+    if (pin_bpf_map(obj, "whitelist_map", WHITELIST_MAP_PATH) < 0) goto cleanup;
 
     // Get log buffer map
     struct bpf_map *log_map = bpf_object__find_map_by_name(obj, "log_buffer");
@@ -530,6 +534,17 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
     
+    LOG_INFO("[Main] Loading whitelist...");
+    int whitelist_map_fd = bpf_obj_get(WHITELIST_MAP_PATH);
+    if (whitelist_map_fd < 0) {
+        LOG_ERROR("Failed to get whitelist map FD, whitelist will not be loaded.");
+    } else {
+        if (load_whitelist(whitelist_map_fd, WHITELIST_CONF_PATH) != 0) {
+            LOG_ERROR("Error loading whitelist.");
+        }
+        close(whitelist_map_fd);
+    }
+
     // If in test mode, exit successfully after loading the program
     if (test_mode) {
         LOG_INFO("Test successful: BPF program loaded.");

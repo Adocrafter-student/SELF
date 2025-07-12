@@ -7,6 +7,8 @@
 #include <yaml.h>
 #include <time.h>
 #include <stdarg.h>
+#include <arpa/inet.h>
+#include <bpf/bpf.h>
 
 // Helper function to write debug logs to /tmp/yaml_parse.log
 static void debug_log(const char *format, ...) {
@@ -251,4 +253,43 @@ error:
     yaml_parser_delete(&parser);
     fclose(fh);
     return -1;
+}
+
+int load_whitelist(int map_fd, const char *filepath) {
+    FILE *f = fopen(filepath, "r");
+    if (!f) {
+        // It's not a critical error if the whitelist file doesn't exist.
+        fprintf(stderr, "Info: whitelist file %s not found, skipping.\n", filepath);
+        return 0;
+    }
+
+    char line[256];
+    int count = 0;
+    while (fgets(line, sizeof(line), f)) {
+        // remove newline
+        line[strcspn(line, "\n")] = 0;
+        
+        if (strlen(line) == 0 || line[0] == '#') {
+            continue; // Skip empty lines and comments
+        }
+
+        struct in_addr addr;
+        if (inet_pton(AF_INET, line, &addr) != 1) {
+            fprintf(stderr, "Warning: invalid IP address in whitelist: %s\n", line);
+            continue;
+        }
+
+        __u32 ip_val = addr.s_addr;
+        __u8 whitelisted = 1;
+
+        if (bpf_map_update_elem(map_fd, &ip_val, &whitelisted, BPF_ANY) != 0) {
+            fprintf(stderr, "Warning: failed to add IP to whitelist map: %s\n", line);
+        } else {
+            count++;
+        }
+    }
+
+    printf("Loaded %d IPs into the whitelist.\n", count);
+    fclose(f);
+    return 0;
 } 

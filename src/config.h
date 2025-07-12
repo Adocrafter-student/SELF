@@ -34,5 +34,6 @@ struct self_config {
 };
 
 int load_config_from_yaml(const char *filepath, struct self_config *config);
+int load_whitelist(int map_fd, const char *filepath);
 
 #endif // SELF_CONFIG_H 

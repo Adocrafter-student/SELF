@@ -49,6 +49,9 @@ cleanup_files() {
     if [ -f "/sys/fs/bpf/self_config_map" ]; then
         rm -f /sys/fs/bpf/self_config_map
     fi
+    if [ -f "/sys/fs/bpf/whitelist_map" ]; then
+        rm -f /sys/fs/bpf/whitelist_map
+    fi
 
     echo "File cleanup completed."
 }

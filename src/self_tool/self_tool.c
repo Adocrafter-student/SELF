@@ -20,6 +20,7 @@ static const char *map_paths[MAP_IDX_MAX] = {
     [MAP_IDX_SCORES]      = "/sys/fs/bpf/score_map",
     [MAP_IDX_FLOOD_STATS] = "/sys/fs/bpf/flood_stats_map",
     [MAP_IDX_CONFIG]      = "/sys/fs/bpf/self_config_map",
+    [MAP_IDX_WHITELIST]   = "/sys/fs/bpf/whitelist_map",
 };
 
 static int open_maps(int *map_fds) {
@@ -374,6 +375,73 @@ static int show_config(int map_fd) {
     return 0;
 }
 
+static int whitelist_add(int map_fd, const char *ip_str) {
+    struct in_addr addr;
+    if (inet_pton(AF_INET, ip_str, &addr) != 1) {
+        printf("Invalid IP address: %s\n", ip_str);
+        return -1;
+    }
+
+    __u8 whitelisted = 1;
+    if (bpf_map_update_elem(map_fd, &addr.s_addr, &whitelisted, BPF_ANY) != 0) {
+        printf("Failed to add IP to whitelist: %s\n", strerror(errno));
+        return -1;
+    }
+
+    printf("IP %s added to whitelist successfully\n", ip_str);
+    return 0;
+}
+
+static int whitelist_remove(int map_fd, const char *ip_str) {
+    struct in_addr addr;
+    if (inet_pton(AF_INET, ip_str, &addr) != 1) {
+        printf("Invalid IP address: %s\n", ip_str);
+        return -1;
+    }
+
+    if (bpf_map_delete_elem(map_fd, &addr.s_addr) != 0) {
+        if (errno == ENOENT) {
+            printf("IP %s is not in the whitelist\n", ip_str);
+        } else {
+            printf("Failed to remove IP from whitelist: %s\n", strerror(errno));
+        }
+        return -1;
+    }
+
+    printf("IP %s removed from whitelist successfully\n", ip_str);
+    return 0;
+}
+
+static int list_whitelist(int map_fd) {
+    __u32 key = 0, next_key;
+    __u8 whitelisted;
+    int ret, count = 0;
+    char ip_str[INET_ADDRSTRLEN];
+
+    printf("Currently whitelisted IP addresses:\n");
+    printf("----------------------------------------\n");
+
+    while ((ret = bpf_map_get_next_key(map_fd, &key, &next_key)) == 0) {
+        if (bpf_map_lookup_elem(map_fd, &next_key, &whitelisted) == 0) {
+            struct in_addr addr = {.s_addr = next_key};
+            inet_ntop(AF_INET, &addr, ip_str, sizeof(ip_str));
+            
+            printf("IP: %s\n", ip_str);
+            printf("----------------------------------------\n");
+            count++;
+        }
+        key = next_key;
+    }
+
+    if (count == 0) {
+        printf("No whitelisted IP addresses found.\n");
+    } else {
+        printf("Total whitelisted IPs: %d\n", count);
+    }
+
+    return 0;
+}
+
 static void print_usage(const char *prog_name) {
     printf("Usage: %s <command> [options]\n", prog_name);
     printf("Commands:\n");
@@ -387,6 +455,9 @@ static void print_usage(const char *prog_name) {
     printf("  scores        - List all IP scores\n");
     printf("  flood-stats   - List current flood statistics per IP\n");
     printf("  config        - Show current SELF configuration\n");
+    printf("  whitelist-add - Add an IP address to the whitelist\n");
+    printf("  whitelist-show- Show all whitelisted IP addresses\n");
+    printf("  whitelist-remove- Remove an IP address from the whitelist\n");
     printf("\nBlock command usage:\n");
     printf("  %s block <ip> [duration]\n", prog_name);
     printf("  duration format: 2d13h14m5s (days, hours, minutes, seconds)\n");
@@ -394,6 +465,10 @@ static void print_usage(const char *prog_name) {
     printf("  Maximum block duration is 30 days\n");
     printf("\nUnblock command usage:\n");
     printf("  %s unblock <ip>\n", prog_name);
+    printf("\nWhitelist add command usage:\n");
+    printf("  %s whitelist-add <ip>\n", prog_name);
+    printf("\nWhitelist remove command usage:\n");
+    printf("  %s whitelist-remove <ip>\n", prog_name);
 }
 
 static int list_entries(int map_fd) {
@@ -509,6 +584,22 @@ int main(int argc, char **argv) {
         cmd = SELF_TOOL_CMD_LIST_FLOOD;
     } else if (strcmp(argv[1], "config") == 0) {
         cmd = SELF_TOOL_CMD_CONFIG;
+    } else if (strcmp(argv[1], "whitelist-add") == 0) {
+        if (argc < 3) {
+            printf("Error: IP address required for whitelist-add command\n");
+            print_usage(argv[0]);
+            return 1;
+        }
+        cmd = SELF_TOOL_CMD_WHITELIST_ADD;
+    } else if (strcmp(argv[1], "whitelist-show") == 0) {
+        cmd = SELF_TOOL_CMD_WHITELIST_SHOW;
+    } else if (strcmp(argv[1], "whitelist-remove") == 0) {
+        if (argc < 3) {
+            printf("Error: IP address required for whitelist-remove command\n");
+            print_usage(argv[0]);
+            return 1;
+        }
+        cmd = SELF_TOOL_CMD_WHITELIST_REMOVE;
     } else {
         printf("Unknown command: %s\n", argv[1]);
         print_usage(argv[0]);
@@ -551,6 +642,15 @@ int main(int argc, char **argv) {
             break;
         case SELF_TOOL_CMD_CONFIG:
             err = show_config(map_fds[MAP_IDX_CONFIG]);
+            break;
+        case SELF_TOOL_CMD_WHITELIST_ADD:
+            err = whitelist_add(map_fds[MAP_IDX_WHITELIST], argv[2]);
+            break;
+        case SELF_TOOL_CMD_WHITELIST_SHOW:
+            err = list_whitelist(map_fds[MAP_IDX_WHITELIST]);
+            break;
+        case SELF_TOOL_CMD_WHITELIST_REMOVE:
+            err = whitelist_remove(map_fds[MAP_IDX_WHITELIST], argv[2]);
             break;
         default:
             err = 1;

@@ -122,6 +122,15 @@ struct {
     __type(value, __u8);    // 0–100 score
 } score_map SEC(".maps");
 
+// eBPF Hash Map for storing whitelisted IPs
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
+    __type(key, __u32);  // IP address
+    __type(value, __u8); // 1 if whitelisted
+} whitelist_map SEC(".maps");
+
 // 4-tuple key for TCP/UDP flow
 struct flow_key {
     __u32 src_ip;
@@ -326,6 +335,13 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
 
     // Early blocked-IP check
     __u32 sip = ip->saddr;
+
+    // Whitelist check
+    __u8 *is_whitelisted = bpf_map_lookup_elem(&whitelist_map, &sip);
+    if (is_whitelisted && *is_whitelisted == 1) {
+        return XDP_PASS;
+    }
+
     __u64 now = bpf_ktime_get_ns();
     __u64 *block_until = bpf_map_lookup_elem(&blocked_ips_map, &sip);
     if (block_until) {

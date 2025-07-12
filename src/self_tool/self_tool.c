@@ -11,13 +11,39 @@
 #include "self_tool.h"
 #include "self_defs.h"
 
-#define MAP_PATH "/sys/fs/bpf/ip_traffic_map"
-#define BLOCKED_IPS_MAP_PATH "/sys/fs/bpf/blocked_ips_map"
-#define ESTABLISHED_MAP_PATH "/sys/fs/bpf/established_map"
-#define SCORE_MAP_PATH "/sys/fs/bpf/score_map"
-#define FLOOD_STATS_MAP_PATH "/sys/fs/bpf/flood_stats_map"
-#define SELF_CONFIG_MAP_PATH "/sys/fs/bpf/self_config_map"
 #define BPF_OBJ_PATH "/usr/lib/self/ddos_protect.o"
+
+static const char *map_paths[MAP_IDX_MAX] = {
+    [MAP_IDX_TRAFFIC]     = "/sys/fs/bpf/ip_traffic_map",
+    [MAP_IDX_BLOCKED_IPS] = "/sys/fs/bpf/blocked_ips_map",
+    [MAP_IDX_ESTABLISHED] = "/sys/fs/bpf/established_map",
+    [MAP_IDX_SCORES]      = "/sys/fs/bpf/score_map",
+    [MAP_IDX_FLOOD_STATS] = "/sys/fs/bpf/flood_stats_map",
+    [MAP_IDX_CONFIG]      = "/sys/fs/bpf/self_config_map",
+};
+
+static int open_maps(int *map_fds) {
+    for (int i = 0; i < MAP_IDX_MAX; i++) {
+        map_fds[i] = bpf_obj_get(map_paths[i]);
+        if (map_fds[i] < 0) {
+            fprintf(stderr, "Failed to open BPF map (%s): %s\n", map_paths[i], strerror(errno));
+            // Close already opened maps
+            for (int j = 0; j < i; j++) {
+                close(map_fds[j]);
+            }
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static void close_maps(int *map_fds) {
+    for (int i = 0; i < MAP_IDX_MAX; i++) {
+        if (map_fds[i] >= 0) {
+            close(map_fds[i]);
+        }
+    }
+}
 
 // Funkcije za formatiranje izlaza
 static inline const char *ip_to_str(uint32_t ip) {
@@ -443,7 +469,8 @@ static int show_stats(int map_fd) {
 }
 
 int main(int argc, char **argv) {
-    int map_fd, blocked_map_fd, established_map_fd, score_map_fd, flood_map_fd, config_map_fd, err;
+    int map_fds[MAP_IDX_MAX];
+    int err;
     enum self_tool_cmd cmd;
 
     if (argc < 2) {
@@ -489,99 +516,47 @@ int main(int argc, char **argv) {
     }
 
     // Open the maps
-    map_fd = bpf_obj_get(MAP_PATH);
-    if (map_fd < 0) {
-        printf("Failed to open BPF map (%s): %s\n", MAP_PATH, strerror(errno));
-        return 1;
-    }
-
-    blocked_map_fd = bpf_obj_get(BLOCKED_IPS_MAP_PATH);
-    if (blocked_map_fd < 0) {
-        printf("Failed to open blocked IPs map (%s): %s\n", BLOCKED_IPS_MAP_PATH, strerror(errno));
-        close(map_fd);
-        return 1;
-    }
-
-    established_map_fd = bpf_obj_get(ESTABLISHED_MAP_PATH);
-    if (established_map_fd < 0) {
-        printf("Failed to open established flows map (%s): %s\n", ESTABLISHED_MAP_PATH, strerror(errno));
-        close(map_fd);
-        close(blocked_map_fd);
-        return 1;
-    }
-
-    score_map_fd = bpf_obj_get(SCORE_MAP_PATH);
-    if (score_map_fd < 0) {
-        printf("Failed to open score map (%s): %s\n", SCORE_MAP_PATH, strerror(errno));
-        close(map_fd);
-        close(blocked_map_fd);
-        close(established_map_fd);
-        return 1;
-    }
-
-    flood_map_fd = bpf_obj_get(FLOOD_STATS_MAP_PATH);
-    if (flood_map_fd < 0) {
-        printf("Failed to open flood stats map (%s): %s\n", FLOOD_STATS_MAP_PATH, strerror(errno));
-        close(map_fd);
-        close(blocked_map_fd);
-        close(established_map_fd);
-        close(score_map_fd);
-        return 1;
-    }
-
-    config_map_fd = bpf_obj_get(SELF_CONFIG_MAP_PATH);
-    if (config_map_fd < 0) {
-        printf("Failed to open config map (%s): %s\n", SELF_CONFIG_MAP_PATH, strerror(errno));
-        close(map_fd);
-        close(blocked_map_fd);
-        close(established_map_fd);
-        close(score_map_fd);
-        close(flood_map_fd);
+    if (open_maps(map_fds) != 0) {
         return 1;
     }
 
     // Execute command
     switch (cmd) {
         case SELF_TOOL_CMD_LIST:
-            err = list_entries(map_fd);
+            err = list_entries(map_fds[MAP_IDX_TRAFFIC]);
             break;
         case SELF_TOOL_CMD_CLEAR:
-            err = clear_map(map_fd);
+            err = clear_map(map_fds[MAP_IDX_TRAFFIC]);
             break;
         case SELF_TOOL_CMD_STATS:
-            err = show_stats(map_fd);
+            err = show_stats(map_fds[MAP_IDX_TRAFFIC]);
             break;
         case SELF_TOOL_CMD_BLOCK:
-            err = block_ip(blocked_map_fd, argv[2], argc > 3 ? argv[3] : NULL);
+            err = block_ip(map_fds[MAP_IDX_BLOCKED_IPS], argv[2], argc > 3 ? argv[3] : NULL);
             break;
         case SELF_TOOL_CMD_LIST_BLOCKED:
-            err = list_blocked_ips(blocked_map_fd);
+            err = list_blocked_ips(map_fds[MAP_IDX_BLOCKED_IPS]);
             break;
         case SELF_TOOL_CMD_UNBLOCK:
-            err = unblock_ip(blocked_map_fd, argv[2]);
+            err = unblock_ip(map_fds[MAP_IDX_BLOCKED_IPS], argv[2]);
             break;
         case SELF_TOOL_CMD_ESTABLISHED:
-            err = list_established_flows(established_map_fd);
+            err = list_established_flows(map_fds[MAP_IDX_ESTABLISHED]);
             break;
         case SELF_TOOL_CMD_SCORES:
-            err = list_scores(score_map_fd);
+            err = list_scores(map_fds[MAP_IDX_SCORES]);
             break;
         case SELF_TOOL_CMD_LIST_FLOOD:
-            err = list_flood_stats(flood_map_fd);
+            err = list_flood_stats(map_fds[MAP_IDX_FLOOD_STATS]);
             break;
         case SELF_TOOL_CMD_CONFIG:
-            err = show_config(config_map_fd);
+            err = show_config(map_fds[MAP_IDX_CONFIG]);
             break;
         default:
             err = 1;
             break;
     }
 
-    close(map_fd);
-    close(blocked_map_fd);
-    close(established_map_fd);
-    close(score_map_fd);
-    close(flood_map_fd);
-    close(config_map_fd);
+    close_maps(map_fds);
     return err;
 } 

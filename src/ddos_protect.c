@@ -11,6 +11,23 @@
 #include <linux/icmp.h>
 #include "ddos_events.h"
 #include "self_defs.h"
+#include "bpf_shared_config.h"
+
+// BPF map to hold configuration
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
+    __type(key, __u32);
+    __type(value, struct bpf_config);
+} self_config_map SEC(".maps");
+
+// Helper to get configuration
+static __always_inline const struct bpf_config *get_config()
+{
+    __u32 key = 0;
+    return bpf_map_lookup_elem(&self_config_map, &key);
+}
 
 // Log levels
 #define LOG_LEVEL_DEBUG   0
@@ -148,18 +165,20 @@ static __always_inline void log_event(struct xdp_md *ctx,
 }
 
 // Helper function to potentially ban an IP based on its score
-static __always_inline void maybe_ban_ip(__u32 sip, __u64 now, __u8 score)
+static __always_inline void maybe_ban_ip(__u32 sip, __u64 now, __u8 score, const struct bpf_config *cfg)
 {
     __u64 expire = 0;
 
-    if (score >= SCORE_PERMANENT_BAN)     expire = BAN_PERMANENT;
-    else if (score >= SCORE_15_DAYS_BAN)  expire = now + BAN_15_DAYS;
-    else if (score >= SCORE_4_DAYS_BAN)   expire = now + BAN_4_DAYS;
-    else if (score >= SCORE_1_DAY_BAN)    expire = now + BAN_1_DAY;
-    else if (score >= SCORE_15_MIN_BAN)   expire = now + BAN_15_MIN;
-    else if (score >= SCORE_1_MIN_BAN)    expire = now + BAN_1_MIN;
-    else if (score >= SCORE_15_SEC_BAN)   expire = now + BAN_15_SEC;
-    else return; // below 10: no ban yet
+    if (!cfg) return;
+
+    if (score >= cfg->score_permanent_ban)     expire = BAN_PERMANENT;
+    else if (score >= cfg->score_15_days_ban)  expire = now + BAN_15_DAYS;
+    else if (score >= cfg->score_4_days_ban)   expire = now + BAN_4_DAYS;
+    else if (score >= cfg->score_1_day_ban)    expire = now + BAN_1_DAY;
+    else if (score >= cfg->score_15_min_ban)   expire = now + BAN_15_MIN;
+    else if (score >= cfg->score_1_min_ban)    expire = now + BAN_1_MIN;
+    else if (score >= cfg->score_15_sec_ban)   expire = now + BAN_15_SEC;
+    else return;
 
     bpf_map_update_elem(&blocked_ips_map, &sip, &expire, BPF_ANY);
 }
@@ -168,32 +187,31 @@ static __always_inline void maybe_ban_ip(__u32 sip, __u64 now, __u8 score)
 static __always_inline void handle_tcp_syn(struct xdp_md *ctx,
                                           struct iphdr *ip,
                                           struct tcphdr *tcp,
-                                          __u64 now)
+                                          __u64 now,
+                                          const struct bpf_config *cfg)
 {
+    if (!cfg) return;
+
     __u32 sip = ip->saddr;
-    struct syn_val new_val = { .ts_ns = now }; // Only need timestamp
+    struct syn_val new_val = { .ts_ns = now };
 
     struct syn_val *val = bpf_map_lookup_elem(&ip_syn_count_map, &sip);
 
     if (!val || (now - val->ts_ns > WINDOW_NS)) {
-        // First SYN from this IP in this window, or map entry expired
         bpf_map_update_elem(&ip_syn_count_map, &sip, &new_val, BPF_ANY);
-        log_event(ctx, LOG_LEVEL_DEBUG, sip, 0, EV_FIRST_SYN); // Optional: Log first SYN
+        log_event(ctx, LOG_LEVEL_DEBUG, sip, 0, EV_FIRST_SYN);
     } else {
-        // Second (or later) SYN within the window -> penalty
-        __u8 new_score = SCORE_HALF_OPEN_INC; // Start with the increment value
+        __u8 new_score = cfg->score_half_open_inc;
         __u8 *scr = bpf_map_lookup_elem(&score_map, &sip);
-        if (scr) { // If score exists, add increment, checking for max
-            new_score = (*scr + SCORE_HALF_OPEN_INC <= SCORE_MAX) ? *scr + SCORE_HALF_OPEN_INC : SCORE_MAX;
+        if (scr) {
+            new_score = (*scr + cfg->score_half_open_inc <= cfg->score_max) ? *scr + cfg->score_half_open_inc : cfg->score_max;
         }
-        // Update map with the calculated new_score
         bpf_map_update_elem(&score_map, &sip, &new_score, BPF_ANY);
-        maybe_ban_ip(sip, now, new_score);
+        maybe_ban_ip(sip, now, new_score, cfg);
 
-        log_event(ctx, LOG_LEVEL_WARNING, sip, new_score, EV_SYN_RETRY_PENALTY); // Log the penalty
+        log_event(ctx, LOG_LEVEL_WARNING, sip, new_score, EV_SYN_RETRY_PENALTY);
 
-        // Reset the SYN counter after penalty
-        new_val.ts_ns = now; // Update timestamp to restart window
+        new_val.ts_ns = now;
         bpf_map_update_elem(&ip_syn_count_map, &sip, &new_val, BPF_ANY);
     }
 }
@@ -202,8 +220,11 @@ static __always_inline void handle_tcp_syn(struct xdp_md *ctx,
 static __always_inline void handle_tcp_ack(struct xdp_md *ctx,
                                          struct iphdr *ip,
                                          struct tcphdr *tcp,
-                                         __u64 now)
+                                         __u64 now,
+                                         const struct bpf_config *cfg)
 {
+    if (!cfg) return;
+
     struct flow_key fk = { ip->saddr, ip->daddr, tcp->source, tcp->dest, IPPROTO_TCP };
 
     // Check if not already established
@@ -227,7 +248,7 @@ static __always_inline void handle_tcp_ack(struct xdp_md *ctx,
         __u8 *scr = bpf_map_lookup_elem(&score_map, &ip->saddr);
         if (scr) {
             __u8 old = *scr;
-            __u8 dec = SCORE_HANDSHAKE_DEC;
+            __u8 dec = cfg->score_handshake_dec;
             __u8 new = old > dec ? old - dec : 0;
             if (new != old) { // Update only if changed
                 bpf_map_update_elem(&score_map, &ip->saddr, &new, BPF_ANY);
@@ -242,34 +263,32 @@ static __always_inline void handle_flood(struct xdp_md *ctx,
                                          __u32 sip,
                                          __u64 pkt_size,
                                          __u64 now,
+                                         const struct bpf_config *cfg,
                                          __u64 pkt_thresh,
-                                         __u64 bytes_thresh
-                                         )
+                                         __u64 bytes_thresh)
 {
-    struct flood_stats *st =
-        bpf_map_lookup_elem(&flood_stats_map, &sip);
-    struct flood_stats upd = {1, pkt_size, now}; // Initialize with current packet
+    if (!cfg) return;
 
-    if (st && (now - st->last_ts <= FLOOD_WINDOW_NS)) {
-        // Within the window, accumulate
+    struct flood_stats *st = bpf_map_lookup_elem(&flood_stats_map, &sip);
+    struct flood_stats upd = {1, pkt_size, now};
+
+    if (st && (now - st->last_ts <= cfg->flood_window_ns)) {
         upd.pkt_count  = st->pkt_count + 1;
         upd.byte_count = st->byte_count + pkt_size;
         upd.last_ts    = st->last_ts;
     } else {
-        // Window expired or first packet, log reset
         log_event(ctx, LOG_LEVEL_DEBUG, sip, 0, EV_FLOOD_RESET);
     }
-    // threshold check
+
     if (upd.pkt_count > pkt_thresh || upd.byte_count > bytes_thresh) {
-        // bump score & maybe ban
-        __u8 new_score = SCORE_FLOOD_INC;
+        __u8 new_score = cfg->score_flood_inc;
         __u8 *scr = bpf_map_lookup_elem(&score_map, &sip);
         if (scr) {
-            __u8 sum = *scr + SCORE_FLOOD_INC;
-            new_score = sum > SCORE_MAX ? SCORE_MAX : sum;
+            __u8 sum = *scr + cfg->score_flood_inc;
+            new_score = sum > cfg->score_max ? cfg->score_max : sum;
         }
         bpf_map_update_elem(&score_map, &sip, &new_score, BPF_ANY);
-        maybe_ban_ip(sip, now, new_score);
+        maybe_ban_ip(sip, now, new_score, cfg);
         log_event(ctx, LOG_LEVEL_WARNING, sip, new_score, EV_FLOOD_DETECTED);
 
         // Reseting stats after penalty by setting counts to 0 and updating timestamp
@@ -284,6 +303,10 @@ static __always_inline void handle_flood(struct xdp_md *ctx,
 // Helper function to process the packet
 static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *data_end)
 {
+    const struct bpf_config *cfg = get_config();
+    if (!cfg)
+        return XDP_PASS;
+
     // Parse Ethernet
     struct ethhdr *eth = data;
     if ((void *)(eth + 1) > data_end) {
@@ -338,15 +361,15 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
 
         // Flood detection only for data packets (ACK without SYN)
         if (tcp->ack && !tcp->syn)
-            handle_flood(ctx, ip->saddr, pkt_size, now, TCP_PKT_THRESH, TCP_BYTES_THRESH);
+            handle_flood(ctx, ip->saddr, pkt_size, now, cfg, cfg->tcp_pkt_thresh, cfg->tcp_bytes_thresh);
 
         // SYN tracking
         if (tcp->syn && !tcp->ack)
-            handle_tcp_syn(ctx, ip, tcp, now);
+            handle_tcp_syn(ctx, ip, tcp, now, cfg);
 
         // Handshake complete
         if (tcp->ack && !tcp->syn)
-            handle_tcp_ack(ctx, ip, tcp, now);
+            handle_tcp_ack(ctx, ip, tcp, now, cfg);
 
     }
     else if (ip->protocol == IPPROTO_UDP) {
@@ -357,7 +380,7 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
         src_port = udp->source;
         dst_port = udp->dest;
         key.port = src_port;
-        handle_flood(ctx, ip->saddr, pkt_size, now, UDP_PKT_THRESH, UDP_BYTES_THRESH);
+        handle_flood(ctx, ip->saddr, pkt_size, now, cfg, cfg->udp_pkt_thresh, cfg->udp_bytes_thresh);
     }
     else if (ip->protocol == IPPROTO_ICMP) {
         void *l4 = (void*)ip + ip->ihl*4;
@@ -365,7 +388,7 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
         if ((void*)(icmp + 1) > data_end)
             return XDP_PASS;
         key.port = 0;
-        handle_flood(ctx, ip->saddr, pkt_size, now, ICMP_PKT_THRESH, ICMP_BYTES_THRESH);
+        handle_flood(ctx, ip->saddr, pkt_size, now, cfg, cfg->icmp_pkt_thresh, cfg->icmp_bytes_thresh);
     } else {
         // not TCP/UDP/ICMP
         return XDP_PASS;

@@ -17,7 +17,19 @@ enum self_tool_cmd {
     SELF_TOOL_CMD_ESTABLISHED,
     SELF_TOOL_CMD_SCORES,
     SELF_TOOL_CMD_LIST_FLOOD,
+    SELF_TOOL_CMD_CONFIG,
     SELF_TOOL_CMD_MAX
+};
+
+// Enumeracija za indekse mapa
+enum map_index {
+    MAP_IDX_TRAFFIC = 0,
+    MAP_IDX_BLOCKED_IPS,
+    MAP_IDX_ESTABLISHED,
+    MAP_IDX_SCORES,
+    MAP_IDX_FLOOD_STATS,
+    MAP_IDX_CONFIG,
+    MAP_IDX_MAX
 };
 
 // Strukture koje odgovaraju BPF mapi
@@ -49,11 +61,38 @@ struct flow_key {
     uint8_t  proto;
 };
 
-// Struktura za flood statistiku (mora odgovarati BPF struct)
 struct flood_stats {
     uint64_t pkt_count;
     uint64_t byte_count;
     uint64_t last_ts;   // nanoseconds of last reset
+};
+
+struct bpf_config {
+    // Score thresholds
+    int32_t score_permanent_ban;
+    int32_t score_15_days_ban;
+    int32_t score_4_days_ban;
+    int32_t score_1_day_ban;
+    int32_t score_15_min_ban;
+    int32_t score_1_min_ban;
+    int32_t score_15_sec_ban;
+    int32_t score_half_open_inc;
+    int32_t score_handshake_dec;
+    int32_t score_flood_inc;
+    int32_t score_max;
+
+    // Flood detection
+    uint64_t flood_window_ns;
+
+    // Thresholds
+    int32_t generic_pkt_thresh;
+    int32_t generic_bytes_thresh;
+    int32_t icmp_pkt_thresh;
+    int32_t icmp_bytes_thresh;
+    int32_t udp_pkt_thresh;
+    int32_t udp_bytes_thresh;
+    int32_t tcp_pkt_thresh;
+    int32_t tcp_bytes_thresh;
 };
 
 #endif // SELF_TOOL_H 

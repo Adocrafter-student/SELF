@@ -1,0 +1,12 @@
+Package: self
+Version: 1.0.0-1
+Section: net
+Priority: optional
+Architecture: amd64
+Maintainer: Administrator <admin@example.com>
+Depends: libbpf0
+Recommends: linux-tools-common | linux-tools-generic
+Description: Self-learning firewall based on eBPF
+ A DDoS protection system that uses eBPF to monitor and block malicious traffic.
+ This package provides a service that monitors network traffic and learns
+ to detect and prevent DDoS attacks.

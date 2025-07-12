@@ -22,6 +22,7 @@
 #include "ddos_events.h"
 #include <sys/stat.h>
 #include <fcntl.h>
+#include "config.h"
 
 // Log levels
 #define LOG_LEVEL_DEBUG   0
@@ -418,6 +419,7 @@ static void cleanup(void);
 int main(int argc, char **argv)
 {
     int test_mode = 0;
+    struct self_config config;
     
     // Initialize logger with INFO level
     if (logger_init() != 0) {
@@ -426,6 +428,17 @@ int main(int argc, char **argv)
     }
     logger_set_level(LOG_LEVEL_INFO);  // Set default log level to INFO
     
+    // Load config from YAML
+    if (load_config_from_yaml("/etc/self/self_metric.yaml", &config) != 0) {
+        LOG_ERROR("Failed to load configuration from YAML. Exiting.");
+        return EXIT_FAILURE;
+    }
+
+    LOG_INFO("Configuration loaded successfully:");
+    LOG_INFO("  Score for permanent ban: %d", config.score_permanent_ban);
+    LOG_INFO("  TCP packet threshold: %d", config.tcp_pkt_thresh);
+
+
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--test") == 0) {
             test_mode = 1;

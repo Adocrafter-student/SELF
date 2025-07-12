@@ -8,4 +8,4 @@ This project is licensed under the [CC BY-NC 4.0 License](https://creativecommon
 Commercial use and academic reuse (e.g., thesis presentations) require written permission from the author.
 **Commercial licensing is available upon request.**
 
-Note: `libpf` is included as a submodule and is licensed separately under its original open-source license.
+Note: `libpf` and 'libyaml' is included as a submodule and is licensed separately under its original open-source license.

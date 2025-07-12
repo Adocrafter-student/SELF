@@ -1,0 +1,27 @@
+scores:
+  permanent_ban: 90
+  ban_15_days: 80
+  ban_4_days: 70
+  ban_1_day: 50
+  ban_15_min: 30
+  ban_1_min: 20
+  ban_15_sec: 10
+  half_open_inc: 2
+  handshake_dec: 5
+  flood_inc: 15
+  max: 100
+
+flood_detection:
+  window_ns: 1000000000 # 1 second
+
+thresholds:
+  packets:
+    generic: 300
+    icmp: 100
+    udp: 300
+    tcp: 1000
+  bytes:
+    generic: 2097152 # 2 MB
+    icmp: 262144 # 256 KB
+    udp: 1048576 # 1 MB
+    tcp: 1048576 # 1 MB 

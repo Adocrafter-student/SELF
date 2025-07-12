@@ -5,6 +5,7 @@ SRC_DIR     := src
 BUILD_DIR   := build
 PKG_DIR     := pkg
 LIBBPF_DIR  := third_party/libbpf
+LIBYAML_DIR := third_party/libyaml
 
 # Files
 BPF_PROG    := ddos_protect.o
@@ -15,24 +16,28 @@ SELF_TOOL   := self-tool
 $(shell mkdir -p $(BUILD_DIR))
 
 # Source files
-SRCS := $(SRC_DIR)/main.c $(SRC_DIR)/logger.c
+SRCS := $(SRC_DIR)/main.c $(SRC_DIR)/logger.c $(SRC_DIR)/config.c
 OBJS := $(SRCS:.c=.o)
 
 # Compilation flags
 BPF_CFLAGS   := -g -O2 -target bpf -c
-USER_CFLAGS  := -Wall -O2 -I$(SRC_DIR) -I$(LIBBPF_DIR)/src
-USER_LDFLAGS := $(LIBBPF_DIR)/src/libbpf.a -lelf -lz -lpthread -lrt
+USER_CFLAGS  := -Wall -O2 -I$(SRC_DIR) -I$(LIBBPF_DIR)/src -I$(LIBYAML_DIR)/include
+USER_LDFLAGS := $(LIBBPF_DIR)/src/libbpf.a $(LIBYAML_DIR)/src/.libs/libyaml.a -lelf -lz -lpthread -lrt
 
 # Default target
 all: $(BUILD_DIR)/$(BPF_PROG) $(BUILD_DIR)/$(USER_PROG) $(BUILD_DIR)/$(SELF_TOOL)
+
+# Build libyaml if not already built
+$(LIBYAML_DIR)/src/.libs/libyaml.a:
+	cd $(LIBYAML_DIR) && ./bootstrap && ./configure --enable-static --disable-shared && make
 
 # Compile eBPF program
 $(BUILD_DIR)/$(BPF_PROG): $(SRC_DIR)/ddos_protect.c
 	clang $(BPF_CFLAGS) $< -o $@
 
 # Compile user-space loader (main binary)
-$(BUILD_DIR)/$(USER_PROG): $(SRCS)
-	$(CC) $(USER_CFLAGS) $^ -o $@ $(USER_LDFLAGS)
+$(BUILD_DIR)/$(USER_PROG): $(SRCS) $(LIBYAML_DIR)/src/.libs/libyaml.a
+	$(CC) $(USER_CFLAGS) $(SRCS) -o $@ $(USER_LDFLAGS)
 
 # Compile self-tool
 $(BUILD_DIR)/$(SELF_TOOL): $(SRC_DIR)/self_tool/self_tool.c

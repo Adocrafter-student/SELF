@@ -57,6 +57,7 @@ cp debian/self.service ${TEMP_DIR}/etc/systemd/system/
 # Create config directory and copy config file
 mkdir -p ${TEMP_DIR}/etc/self
 cp pkg/self.conf ${TEMP_DIR}/etc/self/
+cp pkg/self_metric.yaml ${TEMP_DIR}/etc/self/
 
 # Build the actual package
 echo "Building Debian package..."

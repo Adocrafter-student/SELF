@@ -54,6 +54,10 @@ chmod 755 ${DEBIAN_DIR}/postinst ${DEBIAN_DIR}/postrm ${DEBIAN_DIR}/preinst ${DE
 mkdir -p ${TEMP_DIR}/etc/systemd/system
 cp debian/self.service ${TEMP_DIR}/etc/systemd/system/
 
+# Create config directory and copy config file
+mkdir -p ${TEMP_DIR}/etc/self
+cp pkg/self.conf ${TEMP_DIR}/etc/self/
+
 # Build the actual package
 echo "Building Debian package..."
 dpkg-deb --build ${TEMP_DIR} ${BUILD_DIR}/self_1.0.0-1_amd64.deb

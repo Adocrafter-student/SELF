@@ -39,7 +39,7 @@ case "$1" in
         # Enable and start service using deb-systemd helpers
         if [ -d /run/systemd/system ]; then
             /bin/systemctl enable self.service --quiet  || true
-            /bin/systemctl start  self.service --quiet  || true
+            #/bin/systemctl start  self.service --quiet  || true
         fi
     ;;
 

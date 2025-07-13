@@ -370,6 +370,7 @@ static int show_config(int map_fd) {
     printf("  ICMP: %d packets, %d bytes\n", cfg.icmp_pkt_thresh, cfg.icmp_bytes_thresh);
     printf("  UDP: %d packets, %d bytes\n", cfg.udp_pkt_thresh, cfg.udp_bytes_thresh);
     printf("  TCP: %d packets, %d bytes\n", cfg.tcp_pkt_thresh, cfg.tcp_bytes_thresh);
+    printf("  HTTP: %d packets, %d bytes\n", cfg.http_pkt_thresh, cfg.http_bytes_thresh);
     printf("----------------------------------------\n");
 
     return 0;

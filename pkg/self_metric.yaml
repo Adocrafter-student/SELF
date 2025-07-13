@@ -27,4 +27,7 @@ thresholds:
     bytes: 1048576 # 1 MB
   tcp:
     packets: 1000
-    bytes: 1048576 # 1 MB 
+    bytes: 1048576 # 1 MB
+  http:
+    packets: 500
+    bytes: 2097152 # 2 MB 

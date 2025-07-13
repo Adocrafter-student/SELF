@@ -142,6 +142,8 @@ static int update_bpf_config_map(struct bpf_object *bpf_obj, const struct self_c
         .udp_bytes_thresh = config->udp_bytes_thresh,
         .tcp_pkt_thresh = config->tcp_pkt_thresh,
         .tcp_bytes_thresh = config->tcp_bytes_thresh,
+        .http_pkt_thresh = config->http_pkt_thresh,
+        .http_bytes_thresh = config->http_bytes_thresh,
     };
 
     __u32 key = 0;

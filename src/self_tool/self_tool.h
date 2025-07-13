@@ -36,21 +36,24 @@ enum map_index {
     MAP_IDX_FLOOD_STATS,
     MAP_IDX_CONFIG,
     MAP_IDX_WHITELIST,
+    MAP_IDX_GLOBAL_STATS,
     MAP_IDX_MAX
 };
 
-// Strukture koje odgovaraju BPF mapi
-struct ip_key {
-    uint32_t ip;
-    uint16_t port;
+// Structures matching the BPF map definitions
+struct traffic_stats {
+    uint64_t passed_packets;
+    uint64_t passed_bytes;
+    uint64_t blocked_packets;
+    uint64_t blocked_bytes;
 };
 
-struct traffic_stats {
-    uint64_t packet_count;
-    uint64_t last_seen;
-    uint64_t bytes;
-    uint64_t blocked;
-    uint64_t block_until;  // Timestamp kada blokada ističe (0 = permanentna)
+// New struct for global, non-sampled counters
+struct global_stats {
+    uint64_t total_passed_packets;
+    uint64_t total_passed_bytes;
+    uint64_t total_blocked_packets;
+    uint64_t total_blocked_bytes;
 };
 
 // Struktura za skor IP adrese
@@ -59,7 +62,7 @@ struct ip_score {
     uint8_t score;  // Skor od 0-100
 };
 
-// 4-tuple key for TCP/UDP flow (mora odgovarati BPF struct)
+// 4-tuple key for TCP/UDP flow (must match BPF struct)
 struct flow_key {
     uint32_t src_ip;
     uint32_t dst_ip;
@@ -102,6 +105,7 @@ struct bpf_config {
     int32_t tcp_bytes_thresh;
     int32_t http_pkt_thresh;
     int32_t http_bytes_thresh;
+    int32_t stats_sampling_rate;
 };
 
 #endif // SELF_TOOL_H 

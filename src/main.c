@@ -39,21 +39,17 @@
 #define SCORE_MAP_PATH "/sys/fs/bpf/score_map"
 #define FLOOD_STATS_MAP_PATH "/sys/fs/bpf/flood_stats_map"
 #define SELF_CONFIG_MAP_PATH "/sys/fs/bpf/self_config_map"
+#define IP_STATS_MAP_PATH "/sys/fs/bpf/ip_stats_map"
+#define GLOBAL_STATS_MAP_PATH "/sys/fs/bpf/global_stats_map"
 #define WHITELIST_MAP_PATH "/sys/fs/bpf/whitelist_map"
 #define WHITELIST_CONF_PATH "/etc/self/whitelist.conf"
 
-// Key for the map
-struct ip_key {
-    __u32 ip;
-    __u16 port;
-};
-
 // Value for the map
 struct traffic_stats {
-    __u64 packet_count;
-    __u64 last_seen;
-    __u64 bytes;
-    __u64 blocked;
+    __u64 passed_packets;
+    __u64 passed_bytes;
+    __u64 blocked_packets;
+    __u64 blocked_bytes;
 };
 
 // Log entry structure
@@ -144,6 +140,7 @@ static int update_bpf_config_map(struct bpf_object *bpf_obj, const struct self_c
         .tcp_bytes_thresh = config->tcp_bytes_thresh,
         .http_pkt_thresh = config->http_pkt_thresh,
         .http_bytes_thresh = config->http_bytes_thresh,
+        .stats_sampling_rate = config->stats_sampling_rate,
     };
 
     __u32 key = 0;
@@ -233,7 +230,8 @@ static void cleanup_pinned_maps(void)
 {
     const char *map_paths[] = {
         "/sys/fs/bpf/log_buffer",
-        "/sys/fs/bpf/ip_traffic_map",
+        IP_STATS_MAP_PATH,
+        GLOBAL_STATS_MAP_PATH,
         BLOCKED_IPS_MAP_PATH,
         IP_SYN_COUNT_MAP_PATH,
         ESTABLISHED_MAP_PATH,
@@ -278,9 +276,9 @@ static int pin_bpf_map(struct bpf_object *obj, const char *map_name, const char 
         LOG_INFO("%s already exists at %s", map_name, pin_path);
     }
 
-    if (strcmp(map_name, "ip_traffic_map") == 0) {
+    if (strcmp(map_name, "ip_stats_map") == 0) {
         map_fd = fd;
-        LOG_INFO("ip_traffic_map fd is %d", map_fd);
+        LOG_INFO("ip_stats_map fd is %d", map_fd);
     }
 
     return 0;
@@ -341,7 +339,8 @@ static int load_bpf_program(int test_only, const struct self_config *config)
     }
 
     // Pin all relevant maps using the helper
-    if (pin_bpf_map(obj, "ip_traffic_map", "/sys/fs/bpf/ip_traffic_map") < 0) goto cleanup;
+    if (pin_bpf_map(obj, "ip_stats_map", IP_STATS_MAP_PATH) < 0) goto cleanup;
+    if (pin_bpf_map(obj, "global_stats_map", GLOBAL_STATS_MAP_PATH) < 0) goto cleanup;
     if (pin_bpf_map(obj, "log_buffer", "/sys/fs/bpf/log_buffer") < 0) goto cleanup;
     if (pin_bpf_map(obj, "blocked_ips_map", BLOCKED_IPS_MAP_PATH) < 0) goto cleanup;
     if (pin_bpf_map(obj, "ip_syn_count_map", IP_SYN_COUNT_MAP_PATH) < 0) goto cleanup;
@@ -431,7 +430,7 @@ static void *monitor_traffic(void *arg)
         }
 
         // We'll iterate through up to some # of entries
-        struct ip_key key = {0}, next_key;
+        __u32 key = {0}, next_key;
         struct traffic_stats stats;
         int ret, count = 0;
 
@@ -439,13 +438,15 @@ static void *monitor_traffic(void *arg)
             if (bpf_map_lookup_elem(map_fd, &next_key, &stats) == 0) {
                 // Convert IP to string
                 char ip_str[INET_ADDRSTRLEN];
-                struct in_addr addr = {.s_addr = next_key.ip};
+                struct in_addr addr = {.s_addr = next_key};
                 inet_ntop(AF_INET, &addr, ip_str, sizeof(ip_str));
 
-                LOG_DEBUG("IP: %s, Port: %u, Packets: %llu, Blocked: %llu",
-                       ip_str, ntohs(next_key.port),
-                       (unsigned long long)stats.packet_count,
-                       (unsigned long long)stats.blocked);
+                LOG_DEBUG("IP: %s, Passed: %llu pkts (%llu bytes), Blocked: %llu pkts (%llu bytes)",
+                       ip_str,
+                       (unsigned long long)stats.passed_packets,
+                       (unsigned long long)stats.passed_bytes,
+                       (unsigned long long)stats.blocked_packets,
+                       (unsigned long long)stats.blocked_bytes);
                 count++;
             }
             key = next_key;

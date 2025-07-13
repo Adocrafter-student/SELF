@@ -11,6 +11,9 @@ scores:
   flood_inc: 15
   max: 100
 
+statistics:
+  sampling_rate: 10 # Update stats for 1 in every 10 packets
+
 flood_detection:
   window_ns: 1000000000 # 1 second
 

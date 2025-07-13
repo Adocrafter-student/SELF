@@ -18,10 +18,6 @@ cleanup_files() {
         rm -rf /sys/fs/bpf/self
     fi
     
-    # Remove the ip_traffic_map
-    if [ -f "/sys/fs/bpf/ip_traffic_map" ]; then
-        rm -f /sys/fs/bpf/ip_traffic_map
-    fi
     # Remove the blocked_ips_map
     if [ -f "/sys/fs/bpf/blocked_ips_map" ]; then
         rm -f /sys/fs/bpf/blocked_ips_map
@@ -51,6 +47,13 @@ cleanup_files() {
     fi
     if [ -f "/sys/fs/bpf/whitelist_map" ]; then
         rm -f /sys/fs/bpf/whitelist_map
+    fi
+    if [ -f "/sys/fs/bpf/ip_stats_map" ]; then
+        rm -f /sys/fs/bpf/ip_stats_map
+    fi
+    #remove global stats map
+    if [ -f "/sys/fs/bpf/global_stats_map" ]; then
+        rm -f /sys/fs/bpf/global_stats_map
     fi
 
     echo "File cleanup completed."

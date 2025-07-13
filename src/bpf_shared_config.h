@@ -35,6 +35,9 @@ struct bpf_config {
     // HTTP thresholds
     int32_t http_pkt_thresh;
     int32_t http_bytes_thresh;
+
+    // Statistics
+    int32_t stats_sampling_rate;
 };
 
 #endif // BPF_SHARED_CONFIG_H 

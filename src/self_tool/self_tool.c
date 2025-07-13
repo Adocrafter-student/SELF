@@ -453,6 +453,7 @@ static void print_usage(const char *prog_name) {
     printf("  clear <target>- Clear data from BPF maps (stopping service needed for best results).\n");
     printf("                  targets: stats, scores, blocked, all\n");
     printf("  stats         - Show overall statistics\n");
+    printf("  json-stats    - Show overall statistics in JSON format\n");
     printf("  block         - Block an IP address\n");
     printf("  list-blocked  - List all currently blocked IP addresses\n");
     printf("  unblock       - Unblock an IP address\n");
@@ -485,6 +486,234 @@ static int get_possible_cpus(void) {
         return 1; // Fallback
     }
     return (int)nprocs;
+}
+
+// JSON generation functions
+static int list_ip_stats_json(int map_fd) {
+    __u32 key = 0, next_key;
+    struct traffic_stats stats;
+    int first = 1;
+
+    printf("{\n");
+    printf("    \"entries\": [\n");
+
+    while (bpf_map_get_next_key(map_fd, &key, &next_key) == 0) {
+        if (bpf_map_lookup_elem(map_fd, &next_key, &stats) == 0) {
+            if (!first) {
+                printf(",\n");
+            }
+            printf("      {\n");
+            printf("        \"ip\": \"%s\",\n", ip_to_str(next_key));
+            printf("        \"passedPackets\": %llu,\n", (unsigned long long)stats.passed_packets);
+            printf("        \"passedBytes\": %llu,\n", (unsigned long long)stats.passed_bytes);
+            printf("        \"blockedPackets\": %llu,\n", (unsigned long long)stats.blocked_packets);
+            printf("        \"blockedBytes\": %llu\n", (unsigned long long)stats.blocked_bytes);
+            printf("      }");
+            first = 0;
+        }
+        key = next_key;
+    }
+    printf("\n    ]\n");
+    printf("  }");
+    return 0;
+}
+
+static int list_scores_json(int map_fd) {
+    __u32 key = 0, next_key;
+    __u8 score;
+    int first = 1;
+
+    printf("{\n");
+    printf("    \"entries\": [\n");
+
+    while (bpf_map_get_next_key(map_fd, &key, &next_key) == 0) {
+        if (bpf_map_lookup_elem(map_fd, &next_key, &score) == 0) {
+            if (!first) {
+                printf(",\n");
+            }
+            printf("      {\n");
+            printf("        \"ip\": \"%s\",\n", ip_to_str(next_key));
+            printf("        \"score\": %u,\n", score);
+            printf("        \"maxScore\": %u\n", SCORE_MAX);
+            printf("      }");
+            first = 0;
+        }
+        key = next_key;
+    }
+    printf("\n    ]\n");
+    printf("  }");
+    return 0;
+}
+
+static int list_blocked_ips_json(int map_fd) {
+    __u32 key = 0, next_key;
+    __u64 block_until;
+    char duration_buf[32];
+    int first = 1;
+
+    printf("{\n");
+    printf("    \"entries\": [\n");
+
+    while (bpf_map_get_next_key(map_fd, &key, &next_key) == 0) {
+        if (bpf_map_lookup_elem(map_fd, &next_key, &block_until) == 0) {
+            if (!first) {
+                printf(",\n");
+            }
+            format_duration(block_until, duration_buf, sizeof(duration_buf));
+            printf("      {\n");
+            printf("        \"ip\": \"%s\",\n", ip_to_str(next_key));
+            printf("        \"blockDuration\": \"%s\"\n", duration_buf);
+            printf("      }");
+            first = 0;
+        }
+        key = next_key;
+    }
+    printf("\n    ]\n");
+    printf("  }");
+    return 0;
+}
+
+static int list_flood_stats_json(int map_fd) {
+    __u32 key = 0, next_key;
+    struct flood_stats stats;
+    int first = 1;
+
+    printf("{\n");
+    printf("    \"entries\": [\n");
+
+    while (bpf_map_get_next_key(map_fd, &key, &next_key) == 0) {
+        if (bpf_map_lookup_elem(map_fd, &next_key, &stats) == 0) {
+             if (!first) {
+                printf(",\n");
+            }
+            struct timespec ts;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            __u64 now_ns = ((__u64)ts.tv_sec * 1000000000ULL) + ts.tv_nsec;
+            double time_since_reset_s = (stats.last_ts > 0) ? (double)(now_ns - stats.last_ts) / 1e9 : -1.0;
+            
+            printf("      {\n");
+            printf("        \"ip\": \"%s\",\n", ip_to_str(next_key));
+            printf("        \"packetCount\": %llu,\n", (unsigned long long)stats.pkt_count);
+            printf("        \"byteCount\": %llu,\n", (unsigned long long)stats.byte_count);
+            printf("        \"lastResetSecondsAgo\": %.2f\n", time_since_reset_s);
+            printf("      }");
+            first = 0;
+        }
+        key = next_key;
+    }
+     printf("\n    ]\n");
+    printf("  }");
+    return 0;
+}
+
+static int show_config_json(int map_fd) {
+    struct bpf_config cfg;
+    __u32 key = 0;
+
+    if (bpf_map_lookup_elem(map_fd, &key, &cfg) != 0) {
+        fprintf(stderr, "Failed to read config map: %s\n", strerror(errno));
+        return -1;
+    }
+
+    printf("{\n");
+    printf("    \"scoreThresholds\": {\n");
+    printf("      \"permanentBan\": %d,\n", cfg.score_permanent_ban);
+    printf("      \"ban15Days\": %d,\n", cfg.score_15_days_ban);
+    printf("      \"ban4Days\": %d,\n", cfg.score_4_days_ban);
+    printf("      \"ban1Day\": %d,\n", cfg.score_1_day_ban);
+    printf("      \"ban15Minutes\": %d,\n", cfg.score_15_min_ban);
+    printf("      \"ban1Minute\": %d,\n", cfg.score_1_min_ban);
+    printf("      \"ban15Seconds\": %d\n", cfg.score_15_sec_ban);
+    printf("    },\n");
+    printf("    \"scoreAdjustments\": {\n");
+    printf("      \"halfOpenConnection\": %d,\n", cfg.score_half_open_inc);
+    printf("      \"handshakeComplete\": %d,\n", cfg.score_handshake_dec);
+    printf("      \"floodDetection\": %d,\n", cfg.score_flood_inc);
+    printf("      \"maximumScore\": %d\n", cfg.score_max);
+    printf("    },\n");
+    printf("    \"floodDetection\": {\n");
+    printf("      \"windowNs\": %lu\n", cfg.flood_window_ns);
+    printf("    },\n");
+    printf("    \"statistics\": {\n");
+    printf("      \"samplingRate\": %d\n", cfg.stats_sampling_rate);
+    printf("    },\n");
+    printf("    \"thresholds\": {\n");
+    printf("      \"generic\": {\"packets\": %d, \"bytes\": %d},\n", cfg.generic_pkt_thresh, cfg.generic_bytes_thresh);
+    printf("      \"icmp\": {\"packets\": %d, \"bytes\": %d},\n", cfg.icmp_pkt_thresh, cfg.icmp_bytes_thresh);
+    printf("      \"udp\": {\"packets\": %d, \"bytes\": %d},\n", cfg.udp_pkt_thresh, cfg.udp_bytes_thresh);
+    printf("      \"tcp\": {\"packets\": %d, \"bytes\": %d},\n", cfg.tcp_pkt_thresh, cfg.tcp_bytes_thresh);
+    printf("      \"http\": {\"packets\": %d, \"bytes\": %d}\n", cfg.http_pkt_thresh, cfg.http_bytes_thresh);
+    printf("    }\n");
+    printf("  }");
+
+    return 0;
+}
+
+static int show_stats_json(int map_fd) {
+    __u32 key = 0;
+    int num_cpus = get_possible_cpus();
+    struct global_stats *per_cpu_vals;
+    
+    per_cpu_vals = calloc(num_cpus, sizeof(struct global_stats));
+    if (!per_cpu_vals) {
+        fprintf(stderr, "Failed to allocate memory for stats\n");
+        return -1;
+    }
+
+    if (bpf_map_lookup_elem(map_fd, &key, per_cpu_vals) != 0) {
+        fprintf(stderr, "Failed to lookup global stats map: %s\n", strerror(errno));
+        free(per_cpu_vals);
+        return -1;
+    }
+
+    struct global_stats total_stats = {0};
+    for (int i = 0; i < num_cpus; i++) {
+        total_stats.total_passed_packets += per_cpu_vals[i].total_passed_packets;
+        total_stats.total_passed_bytes += per_cpu_vals[i].total_passed_bytes;
+        total_stats.total_blocked_packets += per_cpu_vals[i].total_blocked_packets;
+        total_stats.total_blocked_bytes += per_cpu_vals[i].total_blocked_bytes;
+    }
+    free(per_cpu_vals);
+
+    printf("{\n");
+    printf("    \"totalPassedPackets\": %llu,\n", (unsigned long long)total_stats.total_passed_packets);
+    printf("    \"totalPassedBytes\": %llu,\n", (unsigned long long)total_stats.total_passed_bytes);
+    printf("    \"totalBlockedPackets\": %llu,\n", (unsigned long long)total_stats.total_blocked_packets);
+    printf("    \"totalBlockedBytes\": %llu\n", (unsigned long long)total_stats.total_blocked_bytes);
+    printf("  }");
+
+    return 0;
+}
+
+
+static int export_all_to_json(int *map_fds) {
+    printf("{\n");
+
+    printf("  \"globalStats\": ");
+    show_stats_json(map_fds[MAP_IDX_GLOBAL_STATS]);
+    printf(",\n");
+
+    printf("  \"ipStats\": ");
+    list_ip_stats_json(map_fds[MAP_IDX_TRAFFIC]);
+    printf(",\n");
+
+    printf("  \"scores\": ");
+    list_scores_json(map_fds[MAP_IDX_SCORES]);
+    printf(",\n");
+
+    printf("  \"blocked\": ");
+    list_blocked_ips_json(map_fds[MAP_IDX_BLOCKED_IPS]);
+    printf(",\n");
+
+    printf("  \"floodStats\": ");
+    list_flood_stats_json(map_fds[MAP_IDX_FLOOD_STATS]);
+    printf(",\n");
+    
+    printf("  \"config\": ");
+    show_config_json(map_fds[MAP_IDX_CONFIG]);
+
+    printf("\n}\n");
+    return 0;
 }
 
 
@@ -679,6 +908,8 @@ int main(int argc, char **argv) {
             return 1;
         }
         cmd = SELF_TOOL_CMD_WHITELIST_REMOVE;
+    } else if (strcmp(argv[1], "json-stats") == 0) {
+        cmd = SELF_TOOL_CMD_JSON_STATS;
     } else {
         printf("Unknown command: %s\n", argv[1]);
         print_usage(argv[0]);
@@ -745,6 +976,9 @@ int main(int argc, char **argv) {
             break;
         case SELF_TOOL_CMD_WHITELIST_REMOVE:
             err = whitelist_remove(map_fds[MAP_IDX_WHITELIST], argv[2]);
+            break;
+        case SELF_TOOL_CMD_JSON_STATS:
+            err = export_all_to_json(map_fds);
             break;
         default:
             err = 1;

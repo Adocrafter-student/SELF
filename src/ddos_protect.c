@@ -62,6 +62,14 @@ struct traffic_stats {
     __u64 blocked_bytes;
 };
 
+// New struct for global, non-sampled counters
+struct global_stats {
+    __u64 total_passed_packets;
+    __u64 total_passed_bytes;
+    __u64 total_blocked_packets;
+    __u64 total_blocked_bytes;
+};
+
 // Constants for simple rate-limiting
 #define PACKET_THRESHOLD 1000             // Packets before we start blocking
 #define RATE_WINDOW      60000000000ULL   // 60 seconds in nanoseconds
@@ -75,6 +83,15 @@ struct {
     __type(key, __u32);
     __type(value, struct traffic_stats);
 } ip_stats_map SEC(".maps");
+
+// Per-CPU array for global, non-sampled statistics
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
+    __type(key, __u32);
+    __type(value, struct global_stats);
+} global_stats_map SEC(".maps");
 
 // eBPF Hash Map for storing blocked IPs
 struct {
@@ -174,6 +191,20 @@ static __always_inline void update_stats(struct xdp_md *ctx,
                                          bool is_blocked,
                                          const struct bpf_config *cfg)
 {
+    // --- Global (non-sampled) stats update ---
+    __u32 key = 0;
+    struct global_stats *g_stats = bpf_map_lookup_elem(&global_stats_map, &key);
+    if (g_stats) {
+        if (is_blocked) {
+            g_stats->total_blocked_packets++;
+            g_stats->total_blocked_bytes += pkt_size;
+        } else {
+            g_stats->total_passed_packets++;
+            g_stats->total_passed_bytes += pkt_size;
+        }
+    }
+
+    // --- Per-IP (sampled) stats update ---
     // If sampling rate is 0 or not set, do not record stats to avoid heavy load
     if (!cfg || cfg->stats_sampling_rate == 0)
         return;

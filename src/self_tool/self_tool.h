@@ -36,6 +36,7 @@ enum map_index {
     MAP_IDX_FLOOD_STATS,
     MAP_IDX_CONFIG,
     MAP_IDX_WHITELIST,
+    MAP_IDX_GLOBAL_STATS,
     MAP_IDX_MAX
 };
 
@@ -45,6 +46,14 @@ struct traffic_stats {
     uint64_t passed_bytes;
     uint64_t blocked_packets;
     uint64_t blocked_bytes;
+};
+
+// New struct for global, non-sampled counters
+struct global_stats {
+    uint64_t total_passed_packets;
+    uint64_t total_passed_bytes;
+    uint64_t total_blocked_packets;
+    uint64_t total_blocked_bytes;
 };
 
 // Struktura za skor IP adrese

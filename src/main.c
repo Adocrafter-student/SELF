@@ -40,6 +40,7 @@
 #define FLOOD_STATS_MAP_PATH "/sys/fs/bpf/flood_stats_map"
 #define SELF_CONFIG_MAP_PATH "/sys/fs/bpf/self_config_map"
 #define IP_STATS_MAP_PATH "/sys/fs/bpf/ip_stats_map"
+#define GLOBAL_STATS_MAP_PATH "/sys/fs/bpf/global_stats_map"
 #define WHITELIST_MAP_PATH "/sys/fs/bpf/whitelist_map"
 #define WHITELIST_CONF_PATH "/etc/self/whitelist.conf"
 
@@ -230,6 +231,7 @@ static void cleanup_pinned_maps(void)
     const char *map_paths[] = {
         "/sys/fs/bpf/log_buffer",
         IP_STATS_MAP_PATH,
+        GLOBAL_STATS_MAP_PATH,
         BLOCKED_IPS_MAP_PATH,
         IP_SYN_COUNT_MAP_PATH,
         ESTABLISHED_MAP_PATH,
@@ -338,6 +340,7 @@ static int load_bpf_program(int test_only, const struct self_config *config)
 
     // Pin all relevant maps using the helper
     if (pin_bpf_map(obj, "ip_stats_map", IP_STATS_MAP_PATH) < 0) goto cleanup;
+    if (pin_bpf_map(obj, "global_stats_map", GLOBAL_STATS_MAP_PATH) < 0) goto cleanup;
     if (pin_bpf_map(obj, "log_buffer", "/sys/fs/bpf/log_buffer") < 0) goto cleanup;
     if (pin_bpf_map(obj, "blocked_ips_map", BLOCKED_IPS_MAP_PATH) < 0) goto cleanup;
     if (pin_bpf_map(obj, "ip_syn_count_map", IP_SYN_COUNT_MAP_PATH) < 0) goto cleanup;

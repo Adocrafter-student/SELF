@@ -356,3 +356,4 @@ This project is licensed under the [CC BY-NC 4.0 License](https://creativecommon
 For commercial licensing, support, or feature requests, please contact the author.
 
 **Note**: This is a sophisticated security tool. Proper configuration and monitoring are essential for production use.
+**Note to myself** Please use following command to start frontend REACT_APP_API_URL=http://<your-python-server-ip>:5000 npm start

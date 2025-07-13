@@ -59,6 +59,11 @@ mkdir -p ${TEMP_DIR}/etc/self
 cp pkg/self.conf ${TEMP_DIR}/etc/self/
 cp pkg/self_metric.yaml ${TEMP_DIR}/etc/self/
 cp pkg/whitelist.conf ${TEMP_DIR}/etc/self/
+cp pkg/server.conf ${TEMP_DIR}/etc/self/
+
+# Copy backend directory
+mkdir -p ${INSTALL_DIR}/backend
+cp -r ${SRC_DIR}/backend ${INSTALL_DIR}/
 
 # Build the actual package
 echo "Building Debian package..."

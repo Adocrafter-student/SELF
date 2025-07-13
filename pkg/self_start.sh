@@ -3,6 +3,9 @@ set -e
 
 # Configuration file path
 CONFIG_FILE="/etc/self/self.conf"
+SERVER_CONFIG_FILE="/etc/self/server.conf"
+CLIENT_PID_FILE="/var/run/self_client.pid"
+CLIENT_SCRIPT_PATH="/usr/lib/self/backend/fetch_stats.py"
 
 # Function to get first available interface
 get_first_interface() {
@@ -32,6 +35,28 @@ fi
 
 
 echo "Starting SELF on interface $INTERFACE..."
+
+# Start client if server.conf exists
+if [ -f "$SERVER_CONFIG_FILE" ]; then
+    echo "Server config found, managing client process..."
+    if [ -f "$CLIENT_PID_FILE" ]; then
+        PID=$(cat "$CLIENT_PID_FILE")
+        if ps -p $PID > /dev/null; then
+            echo "Killing existing client process with PID $PID..."
+            kill $PID
+        else
+            echo "Stale PID file found, removing..."
+        fi
+        rm "$CLIENT_PID_FILE"
+    fi
+    
+    echo "Starting new client process..."
+    python3 "$CLIENT_SCRIPT_PATH" &
+    echo $! > "$CLIENT_PID_FILE"
+else
+    echo "Server config not found, client not started."
+fi
+
 exec /usr/lib/self/main --interface="$INTERFACE"
 
 

@@ -28,7 +28,7 @@ chmod 755 ${SBIN_DIR}/self-start ${SBIN_DIR}/self-stop
 # Create a simplified control file for dpkg-deb
 cat > ${DEBIAN_DIR}/control << EOF
 Package: self
-Version: 1.0.0-1
+Version: 2.0.0-1
 Section: net
 Priority: optional
 Architecture: amd64
@@ -62,6 +62,6 @@ cp pkg/whitelist.conf ${TEMP_DIR}/etc/self/
 
 # Build the actual package
 echo "Building Debian package..."
-dpkg-deb --build ${TEMP_DIR} ${BUILD_DIR}/self_1.0.0-1_amd64.deb
+dpkg-deb --build ${TEMP_DIR} ${BUILD_DIR}/self_2.0.0-1_amd64.deb
 
-echo "Package built: ${BUILD_DIR}/self_1.0.0-1_amd64.deb" 
+echo "Package built: ${BUILD_DIR}/self_2.0.0-1_amd64.deb" 

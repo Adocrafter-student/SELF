@@ -89,6 +89,11 @@ static void assign_config_value(struct self_config *config, char keys[4][256], i
             config->score_max = atoi(value);
             debug_log("SET: score_max = %d", config->score_max);
         }
+    } else if (level == 2 && strcmp(top_level_key, "statistics") == 0) {
+        if (strcmp(second_level_key, "sampling_rate") == 0) {
+            config->stats_sampling_rate = atoi(value);
+            debug_log("SET: stats_sampling_rate = %d", config->stats_sampling_rate);
+        }
     } else if (level == 3 && strcmp(top_level_key, "thresholds") == 0) {
         if (strcmp(third_level_key, "packets") == 0) {
             if (strcmp(second_level_key, "generic") == 0) {
@@ -245,6 +250,7 @@ parsing_complete:
     debug_log("  score_flood_inc: %d", config->score_flood_inc);
     debug_log("  score_max: %d", config->score_max);
     debug_log("  flood_window_ns: %llu", config->flood_window_ns);
+    debug_log("  stats_sampling_rate: %d", config->stats_sampling_rate);
     debug_log("  generic_pkt_thresh: %d", config->generic_pkt_thresh);
     debug_log("  generic_bytes_thresh: %d", config->generic_bytes_thresh);
     debug_log("  icmp_pkt_thresh: %d", config->icmp_pkt_thresh);

@@ -15,7 +15,7 @@
 #define MAX_CLEAR_ATTEMPTS 1000 // A large but finite number of deletions per run
 
 static const char *map_paths[MAP_IDX_MAX] = {
-    [MAP_IDX_TRAFFIC]     = "/sys/fs/bpf/ip_traffic_map",
+    [MAP_IDX_TRAFFIC]     = "/sys/fs/bpf/ip_stats_map",
     [MAP_IDX_BLOCKED_IPS] = "/sys/fs/bpf/blocked_ips_map",
     [MAP_IDX_ESTABLISHED] = "/sys/fs/bpf/established_map",
     [MAP_IDX_SCORES]      = "/sys/fs/bpf/score_map",
@@ -60,13 +60,12 @@ static inline uint16_t port_to_host(uint16_t port) {
 }
 
 // Funkcije za prikaz podataka
-void print_ip_stats(const struct ip_key *key, const struct traffic_stats *stats) {
-    printf("IP: %s, Port: %u\n", ip_to_str(key->ip), port_to_host(key->port));
-    printf("  Packets: %llu\n", (unsigned long long)stats->packet_count);
-    printf("  Bytes: %llu\n", (unsigned long long)stats->bytes);
-    printf("  Blocked: %llu\n", (unsigned long long)stats->blocked);
-    printf("  Last seen: %llu seconds ago\n", 
-           (unsigned long long)((time(NULL) - stats->last_seen/1000000000)));
+void print_ip_stats(const __u32 *ip, const struct traffic_stats *stats) {
+    printf("IP: %s\n", ip_to_str(*ip));
+    printf("  Passed Packets: %llu\n", (unsigned long long)stats->passed_packets);
+    printf("  Passed Bytes: %llu\n", (unsigned long long)stats->passed_bytes);
+    printf("  Blocked Packets: %llu\n", (unsigned long long)stats->blocked_packets);
+    printf("  Blocked Bytes: %llu\n", (unsigned long long)stats->blocked_bytes);
     printf("----------------------------------------\n");
 }
 
@@ -366,6 +365,8 @@ static int show_config(int map_fd) {
     printf("  Maximum Score: %d\n", cfg.score_max);
     printf("\nFlood Detection:\n");
     printf("  Window: %lu ns\n", cfg.flood_window_ns);
+    printf("\nStatistics:\n");
+    printf("  Sampling Rate: 1 in %d packets\n", cfg.stats_sampling_rate);
     printf("\nThresholds:\n");
     printf("  Generic: %d packets, %d bytes\n", cfg.generic_pkt_thresh, cfg.generic_bytes_thresh);
     printf("  ICMP: %d packets, %d bytes\n", cfg.icmp_pkt_thresh, cfg.icmp_bytes_thresh);
@@ -506,11 +507,11 @@ static int clear_bpf_map(int map_fd, const char *map_name, size_t key_size) {
 }
 
 static int list_entries(int map_fd) {
-    struct ip_key key = {0}, next_key;
+    __u32 key = 0, next_key;
     struct traffic_stats stats;
     int ret, count = 0;
 
-    printf("Listing all IP addresses and their statistics:\n");
+    printf("Listing all IP addresses and their statistics Based on Sampling Rate:\n");
     printf("----------------------------------------\n");
 
     while ((ret = bpf_map_get_next_key(map_fd, &key, &next_key)) == 0) {
@@ -531,19 +532,21 @@ static int list_entries(int map_fd) {
 }
 
 static int show_stats(int map_fd) {
-    struct ip_key key = {0}, next_key;
+    __u32 key = 0, next_key;
     struct traffic_stats stats;
     int ret;
-    uint64_t total_packets = 0;
-    uint64_t total_bytes = 0;
-    uint64_t total_blocked = 0;
+    uint64_t total_passed_packets = 0;
+    uint64_t total_passed_bytes = 0;
+    uint64_t total_blocked_packets = 0;
+    uint64_t total_blocked_bytes = 0;
     int count = 0;
 
     while ((ret = bpf_map_get_next_key(map_fd, &key, &next_key)) == 0) {
         if (bpf_map_lookup_elem(map_fd, &next_key, &stats) == 0) {
-            total_packets += stats.packet_count;
-            total_bytes += stats.bytes;
-            total_blocked += stats.blocked;
+            total_passed_packets += stats.passed_packets;
+            total_passed_bytes += stats.passed_bytes;
+            total_blocked_packets += stats.blocked_packets;
+            total_blocked_bytes += stats.blocked_bytes;
             count++;
         }
         key = next_key;
@@ -552,9 +555,10 @@ static int show_stats(int map_fd) {
     printf("Overall Statistics:\n");
     printf("----------------------------------------\n");
     printf("Total IP addresses: %d\n", count);
-    printf("Total packets: %llu\n", (unsigned long long)total_packets);
-    printf("Total bytes: %llu\n", (unsigned long long)total_bytes);
-    printf("Total blocked packets: %llu\n", (unsigned long long)total_blocked);
+    printf("Total packets: %llu\n", (unsigned long long)total_passed_packets);
+    printf("Total bytes: %llu\n", (unsigned long long)total_passed_bytes);
+    printf("Total blocked packets: %llu\n", (unsigned long long)total_blocked_packets);
+    printf("Total blocked bytes: %llu\n", (unsigned long long)total_blocked_bytes);
     printf("----------------------------------------\n");
 
     return 0;
@@ -651,7 +655,7 @@ int main(int argc, char **argv) {
             err = list_entries(map_fds[MAP_IDX_TRAFFIC]);
             break;
         case SELF_TOOL_CMD_CLEAR_STATS:
-            err = clear_bpf_map(map_fds[MAP_IDX_TRAFFIC], "traffic statistics", sizeof(struct ip_key));
+            err = clear_bpf_map(map_fds[MAP_IDX_TRAFFIC], "traffic statistics", sizeof(__u32));
             break;
         case SELF_TOOL_CMD_CLEAR_SCORES:
             err = clear_bpf_map(map_fds[MAP_IDX_SCORES], "IP scores", sizeof(__u32));
@@ -661,7 +665,7 @@ int main(int argc, char **argv) {
             break;
         case SELF_TOOL_CMD_CLEAR_ALL:
             printf("Clearing all maps...\n");
-            err = clear_bpf_map(map_fds[MAP_IDX_TRAFFIC], "traffic statistics", sizeof(struct ip_key));
+            err = clear_bpf_map(map_fds[MAP_IDX_TRAFFIC], "traffic statistics", sizeof(__u32));
             err |= clear_bpf_map(map_fds[MAP_IDX_SCORES], "IP scores", sizeof(__u32));
             err |= clear_bpf_map(map_fds[MAP_IDX_BLOCKED_IPS], "blocked IPs", sizeof(__u32));
             printf("All maps cleared.\n");

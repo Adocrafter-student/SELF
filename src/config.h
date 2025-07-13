@@ -33,6 +33,9 @@ struct self_config {
     int tcp_bytes_thresh;
     int http_pkt_thresh;
     int http_bytes_thresh;
+
+    // Statistics
+    int32_t stats_sampling_rate;
 };
 
 int load_config_from_yaml(const char *filepath, struct self_config *config);

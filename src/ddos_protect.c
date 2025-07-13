@@ -9,6 +9,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 #include <linux/icmp.h>
+#include <stdbool.h>
 #include "ddos_events.h"
 #include "self_defs.h"
 #include "bpf_shared_config.h"
@@ -53,19 +54,12 @@ struct {
     __uint(max_entries, 1024);
 } log_buffer SEC(".maps");
 
-// Key for our IP map
-struct ip_key {
-    __u32 ip;
-    __u16 port;
-};
-
 // Value for our IP map
 struct traffic_stats {
-    __u64 packet_count;
-    __u64 last_seen;
-    __u64 bytes;
-    __u64 blocked;
-    __u64 block_until;  // Timestamp kada blokada ističe (0 = permanentna)
+    __u64 passed_packets;
+    __u64 passed_bytes;
+    __u64 blocked_packets;
+    __u64 blocked_bytes;
 };
 
 // Constants for simple rate-limiting
@@ -73,14 +67,14 @@ struct traffic_stats {
 #define RATE_WINDOW      60000000000ULL   // 60 seconds in nanoseconds
 #define WINDOW_NS        5000000000ULL    // 5 seconds in nanoseconds
 
-// eBPF Hash Map for storing IP traffic data
+// eBPF Hash Map for storing per-IP traffic stats
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1000000);
     __uint(pinning, LIBBPF_PIN_BY_NAME);
-    __type(key, struct ip_key);
+    __type(key, __u32);
     __type(value, struct traffic_stats);
-} ip_traffic_map SEC(".maps");
+} ip_stats_map SEC(".maps");
 
 // eBPF Hash Map for storing blocked IPs
 struct {
@@ -172,6 +166,45 @@ static __always_inline void log_event(struct xdp_md *ctx,
     
     bpf_perf_event_output(ctx, &log_buffer, BPF_F_CURRENT_CPU, &entry, sizeof(entry));
 }
+
+// Helper function to update traffic statistics for an IP
+static __always_inline void update_stats(struct xdp_md *ctx,
+                                         __u32 sip,
+                                         __u64 pkt_size,
+                                         bool is_blocked,
+                                         const struct bpf_config *cfg)
+{
+    // If sampling rate is 0 or not set, do not record stats to avoid heavy load
+    if (!cfg || cfg->stats_sampling_rate == 0)
+        return;
+
+    // Sample 1 out of every N packets, where N is the sampling rate
+    if ((bpf_get_prandom_u32() % cfg->stats_sampling_rate) != 0)
+        return;
+
+    struct traffic_stats *stats = bpf_map_lookup_elem(&ip_stats_map, &sip);
+    if (stats) {
+        if (is_blocked) {
+            stats->blocked_packets++;
+            stats->blocked_bytes += pkt_size;
+        } else {
+            stats->passed_packets++;
+            stats->passed_bytes += pkt_size;
+        }
+        bpf_map_update_elem(&ip_stats_map, &sip, stats, BPF_ANY);
+    } else {
+        // New IP, create stats entry
+        struct traffic_stats new_stats = {
+            .passed_packets = is_blocked ? 0 : 1,
+            .passed_bytes = is_blocked ? 0 : pkt_size,
+            .blocked_packets = is_blocked ? 1 : 0,
+            .blocked_bytes = is_blocked ? pkt_size : 0,
+        };
+        bpf_map_update_elem(&ip_stats_map, &sip, &new_stats, BPF_ANY);
+        log_event(ctx, LOG_LEVEL_DEBUG, sip, 1, EV_NEW_IP);
+    }
+}
+
 
 // Helper function to potentially ban an IP based on its score
 static __always_inline void maybe_ban_ip(__u32 sip, __u64 now, __u8 score, const struct bpf_config *cfg)
@@ -332,6 +365,7 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
     if ((void *)(ip + 1) > data_end) {
         return XDP_PASS;
     }
+    __u64 pkt_size = (void *)data_end - (void *)data;
 
     // Early blocked-IP check
     __u32 sip = ip->saddr;
@@ -347,6 +381,7 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
     if (block_until) {
         if (*block_until == 0 || now < *block_until) {
             log_event(ctx, LOG_LEVEL_WARNING, sip, 0, EV_MANUAL_BLOCK);
+            update_stats(ctx, sip, pkt_size, true, cfg);
             return XDP_DROP;
         }
         // ban expired
@@ -354,10 +389,7 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
         log_event(ctx, LOG_LEVEL_INFO, sip, 0, EV_UNBLOCK);
     }
 
-    __u64 pkt_size = (void *)data_end - (void *)data;
     __u16 src_port = 0, dst_port = 0;
-    struct ip_key key = {0};
-    key.ip = ip->saddr;
 
     if (ip->protocol == IPPROTO_TCP) {
         void *l4 = (void*)ip + ip->ihl*4;
@@ -366,12 +398,12 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
             return XDP_PASS;
         src_port = tcp->source;
         dst_port = tcp->dest;
-        key.port = src_port;
 
         // Fast-path for established flows
         struct flow_key fk = { ip->saddr, ip->daddr, src_port, dst_port, IPPROTO_TCP };
         if (bpf_map_lookup_elem(&established_map, &fk)) {
             log_event(ctx, LOG_LEVEL_INFO, fk.src_ip, 0, EV_ESTABLISHED);
+            update_stats(ctx, sip, pkt_size, false, cfg);
             return XDP_PASS;
         }
 
@@ -398,7 +430,6 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
             return XDP_PASS;
         src_port = udp->source;
         dst_port = udp->dest;
-        key.port = src_port;
         handle_flood(ctx, ip->saddr, pkt_size, now, cfg, cfg->udp_pkt_thresh, cfg->udp_bytes_thresh);
     }
     else if (ip->protocol == IPPROTO_ICMP) {
@@ -406,7 +437,6 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
         struct icmphdr *icmp = l4;
         if ((void*)(icmp + 1) > data_end)
             return XDP_PASS;
-        key.port = 0;
         handle_flood(ctx, ip->saddr, pkt_size, now, cfg, cfg->icmp_pkt_thresh, cfg->icmp_bytes_thresh);
     } else {
         // not TCP/UDP/ICMP
@@ -414,27 +444,7 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
     }
 
     // Packet statistics
-    struct traffic_stats *stats = bpf_map_lookup_elem(&ip_traffic_map, &key);
-    if (stats) {
-        if (now - stats->last_seen > RATE_WINDOW) {
-            stats->packet_count = 0;
-            stats->blocked = 0;
-            log_event(ctx, LOG_LEVEL_INFO, key.ip, stats->packet_count, EV_RESET);
-        }
-        stats->packet_count += 1;
-        stats->bytes += pkt_size;
-        stats->last_seen = now;
-        bpf_map_update_elem(&ip_traffic_map, &key, stats, BPF_ANY);
-    } else {
-        struct traffic_stats new_stats = {
-            .packet_count = 1,
-            .last_seen    = now,
-            .bytes        = pkt_size,
-            .blocked      = 0,
-        };
-        bpf_map_update_elem(&ip_traffic_map, &key, &new_stats, BPF_ANY);
-        log_event(ctx, LOG_LEVEL_DEBUG, key.ip, 1, EV_NEW_IP);
-    }
+    update_stats(ctx, sip, pkt_size, false, cfg);
 
     return XDP_PASS;
 }

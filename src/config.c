@@ -107,6 +107,10 @@ static void assign_config_value(struct self_config *config, char keys[4][256], i
                 config->tcp_pkt_thresh = atoi(value);
                 debug_log("SET: tcp_pkt_thresh = %d", config->tcp_pkt_thresh);
             }
+            else if (strcmp(second_level_key, "http") == 0) {
+                config->http_pkt_thresh = atoi(value);
+                debug_log("SET: http_pkt_thresh = %d", config->http_pkt_thresh);
+            }
         } else if (strcmp(third_level_key, "bytes") == 0) {
             if (strcmp(second_level_key, "generic") == 0) {
                 config->generic_bytes_thresh = atoi(value);
@@ -123,6 +127,10 @@ static void assign_config_value(struct self_config *config, char keys[4][256], i
             else if (strcmp(second_level_key, "tcp") == 0) {
                 config->tcp_bytes_thresh = atoi(value);
                 debug_log("SET: tcp_bytes_thresh = %d", config->tcp_bytes_thresh);
+            }
+            else if (strcmp(second_level_key, "http") == 0) {
+                config->http_bytes_thresh = atoi(value);
+                debug_log("SET: http_bytes_thresh = %d", config->http_bytes_thresh);
             }
         }
     } else {
@@ -245,6 +253,8 @@ parsing_complete:
     debug_log("  udp_bytes_thresh: %d", config->udp_bytes_thresh);
     debug_log("  tcp_pkt_thresh: %d", config->tcp_pkt_thresh);
     debug_log("  tcp_bytes_thresh: %d", config->tcp_bytes_thresh);
+    debug_log("  http_pkt_thresh: %d", config->http_pkt_thresh);
+    debug_log("  http_bytes_thresh: %d", config->http_bytes_thresh);
     
     return 0;
 

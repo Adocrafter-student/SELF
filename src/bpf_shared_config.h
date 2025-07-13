@@ -31,6 +31,10 @@ struct bpf_config {
     int32_t udp_bytes_thresh;
     int32_t tcp_pkt_thresh;
     int32_t tcp_bytes_thresh;
+
+    // HTTP thresholds
+    int32_t http_pkt_thresh;
+    int32_t http_bytes_thresh;
 };
 
 #endif // BPF_SHARED_CONFIG_H 

@@ -9,7 +9,10 @@
 // Enumeracija za komande
 enum self_tool_cmd {
     SELF_TOOL_CMD_LIST = 0,
-    SELF_TOOL_CMD_CLEAR,
+    SELF_TOOL_CMD_CLEAR_STATS,
+    SELF_TOOL_CMD_CLEAR_SCORES,
+    SELF_TOOL_CMD_CLEAR_BLOCKED,
+    SELF_TOOL_CMD_CLEAR_ALL,
     SELF_TOOL_CMD_STATS,
     SELF_TOOL_CMD_BLOCK,
     SELF_TOOL_CMD_LIST_BLOCKED,
@@ -97,6 +100,8 @@ struct bpf_config {
     int32_t udp_bytes_thresh;
     int32_t tcp_pkt_thresh;
     int32_t tcp_bytes_thresh;
+    int32_t http_pkt_thresh;
+    int32_t http_bytes_thresh;
 };
 
 #endif // SELF_TOOL_H 

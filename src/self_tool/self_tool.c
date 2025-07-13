@@ -12,6 +12,7 @@
 #include "self_defs.h"
 
 #define BPF_OBJ_PATH "/usr/lib/self/ddos_protect.o"
+#define MAX_CLEAR_ATTEMPTS 1000 // A large but finite number of deletions per run
 
 static const char *map_paths[MAP_IDX_MAX] = {
     [MAP_IDX_TRAFFIC]     = "/sys/fs/bpf/ip_traffic_map",
@@ -370,6 +371,7 @@ static int show_config(int map_fd) {
     printf("  ICMP: %d packets, %d bytes\n", cfg.icmp_pkt_thresh, cfg.icmp_bytes_thresh);
     printf("  UDP: %d packets, %d bytes\n", cfg.udp_pkt_thresh, cfg.udp_bytes_thresh);
     printf("  TCP: %d packets, %d bytes\n", cfg.tcp_pkt_thresh, cfg.tcp_bytes_thresh);
+    printf("  HTTP: %d packets, %d bytes\n", cfg.http_pkt_thresh, cfg.http_bytes_thresh);
     printf("----------------------------------------\n");
 
     return 0;
@@ -446,7 +448,8 @@ static void print_usage(const char *prog_name) {
     printf("Usage: %s <command> [options]\n", prog_name);
     printf("Commands:\n");
     printf("  list          - List all IP addresses and their statistics\n");
-    printf("  clear         - Clear all entries from the map\n");
+    printf("  clear <target>- Clear data from BPF maps (stopping service needed for best results).\n");
+    printf("                  targets: stats, scores, blocked, all\n");
     printf("  stats         - Show overall statistics\n");
     printf("  block         - Block an IP address\n");
     printf("  list-blocked  - List all currently blocked IP addresses\n");
@@ -471,6 +474,37 @@ static void print_usage(const char *prog_name) {
     printf("  %s whitelist-remove <ip>\n", prog_name);
 }
 
+// Generic map clearing function
+static int clear_bpf_map(int map_fd, const char *map_name, size_t key_size) {
+    void *key = malloc(key_size);
+    if (!key) {
+        fprintf(stderr, "Error: Memory allocation failed for clearing map '%s'\n", map_name);
+        return -1;
+    }
+
+    int count = 0;
+    printf("Clearing %s...\n", map_name);
+
+    for (int i = 0; i < MAX_CLEAR_ATTEMPTS; i++) {
+        if (bpf_map_get_next_key(map_fd, NULL, key) != 0) {
+            break;
+        }
+
+        if (bpf_map_delete_elem(map_fd, key) == 0) {
+            count++;
+        }
+    }
+
+    printf("Cleared %d entries from %s.\n", count, map_name);
+
+    if (count == MAX_CLEAR_ATTEMPTS) {
+        printf("Warning: Reached max clear attempts for %s. Map may not be fully empty if under heavy load.\n", map_name);
+    }
+    
+    free(key);
+    return 0;
+}
+
 static int list_entries(int map_fd) {
     struct ip_key key = {0}, next_key;
     struct traffic_stats stats;
@@ -493,23 +527,6 @@ static int list_entries(int map_fd) {
         printf("Total entries: %d\n", count);
     }
 
-    return 0;
-}
-
-static int clear_map(int map_fd) {
-    struct ip_key key = {0}, next_key;
-    int ret, count = 0;
-
-    printf("Clearing all entries from the map...\n");
-
-    while ((ret = bpf_map_get_next_key(map_fd, &key, &next_key)) == 0) {
-        if (bpf_map_delete_elem(map_fd, &next_key) == 0) {
-            count++;
-        }
-        key = next_key;
-    }
-
-    printf("Cleared %d entries.\n", count);
     return 0;
 }
 
@@ -557,7 +574,24 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "list") == 0) {
         cmd = SELF_TOOL_CMD_LIST;
     } else if (strcmp(argv[1], "clear") == 0) {
-        cmd = SELF_TOOL_CMD_CLEAR;
+        if (argc < 3) {
+            fprintf(stderr, "Error: 'clear' command requires a target (stats, scores, blocked, all)\n");
+            print_usage(argv[0]);
+            return 1;
+        }
+        char *target = argv[2];
+        if (strcmp(target, "stats") == 0) {
+            cmd = SELF_TOOL_CMD_CLEAR_STATS;
+        } else if (strcmp(target, "scores") == 0) {
+            cmd = SELF_TOOL_CMD_CLEAR_SCORES;
+        } else if (strcmp(target, "blocked") == 0) {
+            cmd = SELF_TOOL_CMD_CLEAR_BLOCKED;
+        } else if (strcmp(target, "all") == 0) {
+            cmd = SELF_TOOL_CMD_CLEAR_ALL;
+        } else {
+            fprintf(stderr, "Error: Unknown target for 'clear': %s\n", argv[2]);
+            return 1;
+        }
     } else if (strcmp(argv[1], "stats") == 0) {
         cmd = SELF_TOOL_CMD_STATS;
     } else if (strcmp(argv[1], "block") == 0) {
@@ -616,8 +650,21 @@ int main(int argc, char **argv) {
         case SELF_TOOL_CMD_LIST:
             err = list_entries(map_fds[MAP_IDX_TRAFFIC]);
             break;
-        case SELF_TOOL_CMD_CLEAR:
-            err = clear_map(map_fds[MAP_IDX_TRAFFIC]);
+        case SELF_TOOL_CMD_CLEAR_STATS:
+            err = clear_bpf_map(map_fds[MAP_IDX_TRAFFIC], "traffic statistics", sizeof(struct ip_key));
+            break;
+        case SELF_TOOL_CMD_CLEAR_SCORES:
+            err = clear_bpf_map(map_fds[MAP_IDX_SCORES], "IP scores", sizeof(__u32));
+            break;
+        case SELF_TOOL_CMD_CLEAR_BLOCKED:
+            err = clear_bpf_map(map_fds[MAP_IDX_BLOCKED_IPS], "blocked IPs", sizeof(__u32));
+            break;
+        case SELF_TOOL_CMD_CLEAR_ALL:
+            printf("Clearing all maps...\n");
+            err = clear_bpf_map(map_fds[MAP_IDX_TRAFFIC], "traffic statistics", sizeof(struct ip_key));
+            err |= clear_bpf_map(map_fds[MAP_IDX_SCORES], "IP scores", sizeof(__u32));
+            err |= clear_bpf_map(map_fds[MAP_IDX_BLOCKED_IPS], "blocked IPs", sizeof(__u32));
+            printf("All maps cleared.\n");
             break;
         case SELF_TOOL_CMD_STATS:
             err = show_stats(map_fds[MAP_IDX_TRAFFIC]);

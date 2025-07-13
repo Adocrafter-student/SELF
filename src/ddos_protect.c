@@ -375,17 +375,20 @@ static __always_inline int process_packet(struct xdp_md *ctx, void *data, void *
             return XDP_PASS;
         }
 
-        // Flood detection only for data packets (ACK without SYN)
-        if (tcp->ack && !tcp->syn)
-            handle_flood(ctx, ip->saddr, pkt_size, now, cfg, cfg->tcp_pkt_thresh, cfg->tcp_bytes_thresh);
-
         // SYN tracking
         if (tcp->syn && !tcp->ack)
             handle_tcp_syn(ctx, ip, tcp, now, cfg);
 
         // Handshake complete
-        if (tcp->ack && !tcp->syn)
+        if (tcp->ack && !tcp->syn) {
             handle_tcp_ack(ctx, ip, tcp, now, cfg);
+            if (dst_port == bpf_htons(80) || dst_port == bpf_htons(443)) {
+                handle_flood(ctx, ip->saddr, pkt_size, now, cfg, cfg->http_pkt_thresh, cfg->http_bytes_thresh);
+            } else {
+                // General TCP flood detection for non-HTTP traffic
+                handle_flood(ctx, ip->saddr, pkt_size, now, cfg, cfg->tcp_pkt_thresh, cfg->tcp_bytes_thresh);
+            }
+        }
 
     }
     else if (ip->protocol == IPPROTO_UDP) {

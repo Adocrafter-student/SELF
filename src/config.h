@@ -31,6 +31,8 @@ struct self_config {
     int udp_bytes_thresh;
     int tcp_pkt_thresh;
     int tcp_bytes_thresh;
+    int http_pkt_thresh;
+    int http_bytes_thresh;
 };
 
 int load_config_from_yaml(const char *filepath, struct self_config *config);

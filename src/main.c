@@ -417,50 +417,6 @@ cleanup:
     return -1;
 }
 
-// Thread to monitor our BPF map
-static void *monitor_traffic(void *arg)
-{
-    while (running) {
-        LOG_DEBUG("[Monitor] Checking traffic statistics...");
-
-        if (map_fd < 0) {
-            LOG_ERROR("map_fd is invalid");
-            sleep(2);
-            continue;
-        }
-
-        // We'll iterate through up to some # of entries
-        __u32 key = {0}, next_key;
-        struct traffic_stats stats;
-        int ret, count = 0;
-
-        while ((ret = bpf_map_get_next_key(map_fd, &key, &next_key)) == 0) {
-            if (bpf_map_lookup_elem(map_fd, &next_key, &stats) == 0) {
-                // Convert IP to string
-                char ip_str[INET_ADDRSTRLEN];
-                struct in_addr addr = {.s_addr = next_key};
-                inet_ntop(AF_INET, &addr, ip_str, sizeof(ip_str));
-
-                LOG_DEBUG("IP: %s, Passed: %llu pkts (%llu bytes), Blocked: %llu pkts (%llu bytes)",
-                       ip_str,
-                       (unsigned long long)stats.passed_packets,
-                       (unsigned long long)stats.passed_bytes,
-                       (unsigned long long)stats.blocked_packets,
-                       (unsigned long long)stats.blocked_bytes);
-                count++;
-            }
-            key = next_key;
-        }
-
-        if (count == 0) {
-            LOG_DEBUG("No traffic entries in the map");
-        }
-
-        sleep(5);
-    }
-    return NULL;
-}
-
 void print_usage(char *prog_name) {
     LOG_INFO("Usage: %s [options]", prog_name);
     LOG_INFO("Options:");
@@ -555,14 +511,6 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    //monitoring thread
-    pthread_t monitor_thread;
-    if (pthread_create(&monitor_thread, NULL, monitor_traffic, NULL) != 0) {
-        LOG_ERROR("Failed to create monitor thread: %s", strerror(errno));
-        logger_close();
-        return EXIT_FAILURE;
-    }
-
     // Start log reader thread
     pthread_t log_thread;
     if (pthread_create(&log_thread, NULL, log_reader_thread, NULL) != 0) {
@@ -578,7 +526,6 @@ int main(int argc, char **argv)
     LOG_INFO("Press Ctrl+C to exit.");
 
     // Wait until user stops
-    pthread_join(monitor_thread, NULL);
     pthread_join(log_thread, NULL);
 
     // Detach XDP before exit

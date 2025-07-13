@@ -9,6 +9,7 @@ import logging.handlers
 import sys
 
 # Paths
+#Path on the frontend  REACT_APP_API_URL=http://<your-python-server-ip>:5000 npm start
 SELF_TOOL_PATH = "/usr/lib/self/self-tool"
 CONFIG_PATH = "/etc/self/server.conf"
 LOG_FILE = "/var/log/self-stats.log"
@@ -41,7 +42,7 @@ def get_config():
                 config[key.strip()] = value.strip()
 
     server_ip = config.get('server')
-    server_url = f"http://{server_ip}/" if server_ip else None
+    server_url = f"http://{server_ip}:5000/api/data" if server_ip else None
 
     try:
         config['timeInSeconds'] = int(config.get('timeInSeconds', 300))

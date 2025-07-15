@@ -17,6 +17,11 @@
 #include "logger.h"
 #include <linux/bpf.h>
 #include <linux/perf_event.h>
+
+// XDP flags if not already defined
+#ifndef XDP_FLAGS_SKB_MODE
+#define XDP_FLAGS_SKB_MODE (1U << 1)
+#endif
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include "ddos_events.h"
@@ -77,13 +82,16 @@ char interface[IF_NAMESIZE] = DEFAULT_INTERFACE;
 static int log_buffer_fd = -1;
 static void *log_buffer_mmap = NULL;
 
-// Global link handle
+// Global link handle and attachment info
 static struct bpf_link *prog_link = NULL;
+static int attached_ifindex = -1;
+static int attached_prog_fd = -1;
+static bool using_generic_xdp = false;
 
 // Global variables for log handling
 static pthread_t log_thread;
 
-// New attach/detach helpers using the link API
+// New attach/detach helpers using the link API with generic XDP fallback
 static int attach_xdp(struct bpf_program *bpf_prog, const char *ifname, __u32 flags)
 {
     int ifindex = if_nametoindex(ifname);
@@ -91,13 +99,38 @@ static int attach_xdp(struct bpf_program *bpf_prog, const char *ifname, __u32 fl
         LOG_ERROR("if_nametoindex(%s) failed", ifname);
         return -1;
     }
+    
+    // Try native XDP first
     prog_link = bpf_program__attach_xdp(bpf_prog, ifindex);
     if (libbpf_get_error(prog_link)) {
-        LOG_ERROR("bpf_program__attach_xdp failed: %ld", libbpf_get_error(prog_link));
+        long err = libbpf_get_error(prog_link);
+        LOG_WARNING("Native XDP attach failed: %ld, trying generic XDP", err);
         bpf_link__destroy(prog_link);
         prog_link = NULL;
-        return -1;
+        
+        // Try generic XDP mode as fallback
+        int prog_fd = bpf_program__fd(bpf_prog);
+        if (prog_fd < 0) {
+            LOG_ERROR("Failed to get program fd for generic XDP");
+            return -1;
+        }
+        
+                 int ret = bpf_xdp_attach(ifindex, prog_fd, XDP_FLAGS_SKB_MODE, NULL);
+         if (ret < 0) {
+             LOG_ERROR("Generic XDP attach also failed: %d", ret);
+             return -1;
+         }
+         
+         // Store info for generic XDP cleanup
+         attached_ifindex = ifindex;
+         attached_prog_fd = prog_fd;
+         using_generic_xdp = true;
+         
+         LOG_INFO("Successfully attached using generic XDP mode");
+         return 0;
     }
+    
+    LOG_INFO("Successfully attached using native XDP mode");
     return 0;
 }
 
@@ -106,6 +139,17 @@ static void detach_xdp(void)
     if (prog_link) {
         bpf_link__destroy(prog_link);
         prog_link = NULL;
+    } else if (using_generic_xdp && attached_ifindex >= 0) {
+        // Detach generic XDP
+        int ret = bpf_xdp_detach(attached_ifindex, XDP_FLAGS_SKB_MODE, NULL);
+        if (ret < 0) {
+            LOG_ERROR("Failed to detach generic XDP: %d", ret);
+        } else {
+            LOG_INFO("Successfully detached generic XDP");
+        }
+        attached_ifindex = -1;
+        attached_prog_fd = -1;
+        using_generic_xdp = false;
     }
 }
 

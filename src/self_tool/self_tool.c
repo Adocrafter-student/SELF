@@ -14,6 +14,8 @@
 #define BPF_OBJ_PATH "/usr/lib/self/ddos_protect.o"
 #define MAX_CLEAR_ATTEMPTS 1000 // A large but finite number of deletions per run
 
+#define BATCH_SIZE 1000  // Process 1000 entries per batch
+
 static const char *map_paths[MAP_IDX_MAX] = {
     [MAP_IDX_TRAFFIC]     = "/sys/fs/bpf/ip_stats_map",
     [MAP_IDX_BLOCKED_IPS] = "/sys/fs/bpf/blocked_ips_map",
@@ -771,25 +773,51 @@ static int clear_bpf_map(int map_fd, const char *map_name, size_t key_size) {
 }
 
 static int list_entries(int map_fd) {
-    __u32 key = 0, next_key;
-    struct traffic_stats stats;
-    int ret, count = 0;
-
-    printf("Listing all IP addresses and their statistics Based on Sampling Rate:\n");
+    __u32 batch_keys[BATCH_SIZE];
+    struct traffic_stats batch_values[BATCH_SIZE];
+    __u32 count, partial_count;
+    int total_entries = 0;
+    void *in_batch = NULL, *out_batch = NULL;
+    
+    printf("Listing all IP addresses and their statistics (using native batch operations):\n");
     printf("----------------------------------------\n");
 
-    while ((ret = bpf_map_get_next_key(map_fd, &key, &next_key)) == 0) {
-        if (bpf_map_lookup_elem(map_fd, &next_key, &stats) == 0) {
-            print_ip_stats(&next_key, &stats);
-            count++;
+    // Use native BPF batch operations
+    while (1) {
+        count = BATCH_SIZE;
+        
+        int ret = bpf_map_lookup_batch(map_fd, 
+                                      in_batch,     // Previous batch pointer
+                                      &out_batch,   // Next batch pointer  
+                                      batch_keys,   // Output keys array
+                                      batch_values, // Output values array
+                                      &count,       // In/out: max/actual count
+                                      NULL);        // Options
+        
+        if (ret != 0 && errno != ENOENT) {
+            fprintf(stderr, "Batch lookup failed: %s\n", strerror(errno));
+            break;
         }
-        key = next_key;
+        
+        // Process the batch results
+        for (__u32 i = 0; i < count; i++) {
+            print_ip_stats(&batch_keys[i], &batch_values[i]);
+            total_entries++;
+        }
+        
+        if (count < BATCH_SIZE) {
+            break;
+        }
+        
+        in_batch = out_batch;
     }
 
-    if (count == 0) {
+    if (total_entries == 0) {
         printf("No entries found in the map.\n");
     } else {
-        printf("Total entries: %d\n", count);
+        printf("Total entries: %d\n", total_entries);
+        printf("* Retrieved using %d batch operations instead of %d individual syscalls\n", 
+               (total_entries / BATCH_SIZE) + 1, total_entries * 2);
     }
 
     return 0;

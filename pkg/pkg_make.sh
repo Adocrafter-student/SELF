@@ -20,6 +20,11 @@ cp ${BUILD_DIR}/main ${INSTALL_DIR}/
 cp ${BUILD_DIR}/self-tool ${INSTALL_DIR}/
 chmod +x ${INSTALL_DIR}/main ${INSTALL_DIR}/self-tool
 
+# Copy libbpf shared library to private location
+mkdir -p ${INSTALL_DIR}/lib
+cp third_party/libbpf/src/libbpf.so.1 ${INSTALL_DIR}/lib/
+ln -sf libbpf.so.1 ${INSTALL_DIR}/lib/libbpf.so
+
 # Copy and make scripts executable
 cp ${PKG_DIR}/self_start.sh ${SBIN_DIR}/self-start
 cp ${PKG_DIR}/self_stop.sh ${SBIN_DIR}/self-stop
@@ -33,7 +38,7 @@ Section: net
 Priority: optional
 Architecture: amd64
 Maintainer: Administrator <admin@example.com>
-Depends: libbpf0
+Depends: libelf1
 Recommends: linux-tools-common | linux-tools-generic
 Description: Self-learning firewall based on eBPF
  A DDoS protection system that uses eBPF to monitor and block malicious traffic.

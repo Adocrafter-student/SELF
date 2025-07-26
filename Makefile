@@ -22,10 +22,14 @@ OBJS := $(SRCS:.c=.o)
 # Compilation flags
 BPF_CFLAGS   := -g -O2 -target bpf -c
 USER_CFLAGS  := -Wall -O2 -I$(SRC_DIR) -I$(LIBBPF_DIR)/src -I$(LIBYAML_DIR)/include
-USER_LDFLAGS := $(LIBBPF_DIR)/src/libbpf.a $(LIBYAML_DIR)/src/.libs/libyaml.a -lelf -lz -lpthread -lrt
+USER_LDFLAGS := -L$(LIBBPF_DIR)/src -lbpf $(LIBYAML_DIR)/src/.libs/libyaml.a -lelf -lz -lpthread -lrt -Wl,-rpath,/usr/lib/self/lib
 
 # Default target
 all: $(BUILD_DIR)/$(BPF_PROG) $(BUILD_DIR)/$(USER_PROG) $(BUILD_DIR)/$(SELF_TOOL)
+
+# Build libbpf shared library
+$(LIBBPF_DIR)/src/libbpf.so:
+	cd $(LIBBPF_DIR)/src && make
 
 # Build libyaml if not already built
 $(LIBYAML_DIR)/src/.libs/libyaml.a:
@@ -36,11 +40,11 @@ $(BUILD_DIR)/$(BPF_PROG): $(SRC_DIR)/ddos_protect.c
 	clang $(BPF_CFLAGS) $< -o $@
 
 # Compile user-space loader (main binary)
-$(BUILD_DIR)/$(USER_PROG): $(SRCS) $(LIBYAML_DIR)/src/.libs/libyaml.a
+$(BUILD_DIR)/$(USER_PROG): $(SRCS) $(LIBBPF_DIR)/src/libbpf.so $(LIBYAML_DIR)/src/.libs/libyaml.a
 	$(CC) $(USER_CFLAGS) $(SRCS) -o $@ $(USER_LDFLAGS)
 
 # Compile self-tool
-$(BUILD_DIR)/$(SELF_TOOL): $(SRC_DIR)/self_tool/self_tool.c
+$(BUILD_DIR)/$(SELF_TOOL): $(SRC_DIR)/self_tool/self_tool.c $(LIBBPF_DIR)/src/libbpf.so
 	$(CC) $(USER_CFLAGS) -o $@ $< $(USER_LDFLAGS)
 
 # Just compile everything (like all)
